@@ -126,7 +126,12 @@ def check_session_status(config: Optional[dict] = None) -> dict:
                 url,
                 headers={
                     "accept": "*/*",
-                    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "origin": "https://business.gemini.google",
+                    "referer": "https://business.gemini.google/",
+                    "sec-fetch-dest": "empty",
+                    "sec-fetch-mode": "cors",
+                    "sec-fetch-site": "same-site",
                     "cookie": cookie_str,
                 },
             )
