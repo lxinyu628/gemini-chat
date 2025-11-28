@@ -145,10 +145,11 @@ def load_config() -> dict:
     # 这样旧代码可以继续使用 config.get("secure_c_ses") 等
     cfg.update(cfg["session"])
     
-    # 同样处理 proxy - 如果启用则设置顶层 proxy 字段
+    # 为向后兼容添加 proxy_url 字段
     if cfg["proxy"]["enabled"] and cfg["proxy"]["url"]:
         cfg["proxy_url"] = cfg["proxy"]["url"]  # 兼容性字段
-        cfg["proxy"] = cfg["proxy"]["url"]  # 完全兼容旧代码
+    else:
+        cfg["proxy_url"] = None  # 代理未启用时设为 None
 
     # 清理 group_id
     cfg["group_id"] = sanitize_group_id(cfg.get("group_id"))
