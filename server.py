@@ -11,7 +11,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from biz_gemini.auth import JWTManager
+from biz_gemini.auth import JWTManager, check_session_status
 from biz_gemini.biz_client import BizGeminiClient
 from biz_gemini.config import cookies_age_seconds, cookies_expired, load_config, reload_config, save_config
 from biz_gemini.openai_adapter import OpenAICompatClient
@@ -59,9 +59,9 @@ async def startup_event():
 
     # 启动 Session 保活服务
     print("[*] 启动 Session 保活服务...")
-    keep_alive = get_keep_alive_service(interval_minutes=20)
+    keep_alive = get_keep_alive_service(interval_minutes=10)
     await keep_alive.start()
-    print("[+] Session 保活服务已启动（每 20 分钟刷新一次）")
+    print("[+] Session 保活服务已启动（每 10 分钟检查一次）")
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -130,10 +130,9 @@ async def index():
 
 @app.get("/api/status")
 async def get_status():
-    """获取登录状态和 cookie 过期信息"""
+    """获取登录状态（通过 list-sessions 检查真实的 session 状态）"""
     try:
         config = load_config()
-        age_seconds = cookies_age_seconds(config)
 
         has_credentials = all([
             config.get("secure_c_ses"),
@@ -147,13 +146,16 @@ async def get_status():
                 "message": "未登录，请运行 python app.py login",
             }
 
-        # 计算剩余时间
-        max_age_hours = 24
-        if age_seconds is not None:
-            remaining_seconds = max_age_hours * 3600 - age_seconds
-            remaining_hours = remaining_seconds / 3600
+        # 获取保活服务的状态（如果可用）
+        keep_alive = get_keep_alive_service()
+        keep_alive_status = keep_alive.get_status()
 
-            if remaining_seconds <= 0:
+        # 如果保活服务已经检查过 session，使用缓存的结果
+        if keep_alive_status.get("last_check") and keep_alive_status.get("session_valid") is not None:
+            session_valid = keep_alive_status["session_valid"]
+            session_username = keep_alive_status.get("session_username")
+
+            if not session_valid:
                 return {
                     "logged_in": False,
                     "expired": True,
@@ -162,16 +164,36 @@ async def get_status():
 
             return {
                 "logged_in": True,
-                "remaining_hours": round(remaining_hours, 1),
-                "remaining_seconds": int(remaining_seconds),
-                "warning": remaining_hours < 2,
+                "session_valid": True,
+                "username": session_username,
+                "last_check": keep_alive_status.get("last_check"),
+                "message": f"已登录: {session_username}" if session_username else "已登录",
+            }
+
+        # 如果保活服务还没有检查过，主动检查一次
+        session_status = check_session_status(config)
+
+        if session_status.get("expired", False):
+            return {
+                "logged_in": False,
+                "expired": True,
+                "message": "登录已过期，请重新运行 python app.py login",
+            }
+
+        if session_status.get("error"):
+            return {
+                "logged_in": True,
+                "warning": True,
+                "message": f"检查状态失败: {session_status['error']}",
             }
 
         return {
             "logged_in": True,
-            "remaining_hours": None,
-            "message": "已登录",
+            "session_valid": session_status.get("valid", True),
+            "username": session_status.get("username"),
+            "message": f"已登录: {session_status.get('username')}" if session_status.get("username") else "已登录",
         }
+
     except Exception as e:
         return {
             "logged_in": False,
@@ -558,7 +580,11 @@ async def chat_completions(request: ChatRequest):
         missing = [k for k in ("secure_c_ses", "csesidx", "group_id") if not config.get(k)]
         if missing:
             raise HTTPException(status_code=401, detail=f"配置缺失: {', '.join(missing)}，请先登录")
-        if cookies_expired(config, max_age_hours=24):
+
+        # 检查保活服务的 session 状态（如果可用）
+        keep_alive = get_keep_alive_service()
+        keep_alive_status = keep_alive.get_status()
+        if keep_alive_status.get("last_check") and not keep_alive_status.get("session_valid", True):
             raise HTTPException(status_code=401, detail="登录已过期，请重新登录")
     except HTTPException:
         raise

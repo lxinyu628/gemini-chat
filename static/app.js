@@ -190,13 +190,14 @@ async function checkStatus() {
             elements.statusIndicator.classList.add('error');
             statusText.textContent = '登录已过期';
             showExpiredModal();
-        } else if (data.warning && data.remaining_hours < 2) {
+        } else if (data.warning) {
             elements.statusIndicator.classList.add('warning');
-            statusText.textContent = `剩余 ${data.remaining_hours.toFixed(1)} 小时`;
+            statusText.textContent = data.message || '状态异常';
         } else if (data.logged_in) {
             elements.statusIndicator.classList.add('online');
-            if (data.remaining_hours) {
-                statusText.textContent = `剩余 ${data.remaining_hours.toFixed(1)} 小时`;
+            // 显示用户名或简单的"已登录"状态
+            if (data.username) {
+                statusText.textContent = data.username;
             } else {
                 statusText.textContent = '已登录';
             }

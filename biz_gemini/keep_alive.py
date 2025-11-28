@@ -1,29 +1,32 @@
-"""Session 保活服务 - 定期刷新 JWT 以保持 session 活跃"""
+"""Session 保活服务 - 定期检查 session 状态并刷新 JWT"""
 import asyncio
 from datetime import datetime
 from typing import Optional, Callable
 
-from .auth import JWTManager, _get_jwt_via_api
+from .auth import JWTManager, _get_jwt_via_api, check_session_status
 from .config import load_config, save_config
 
 
 class KeepAliveService:
     """Session 保活服务"""
 
-    def __init__(self, interval_minutes: int = 20):
+    def __init__(self, interval_minutes: int = 10):
         """
         初始化保活服务
 
         Args:
-            interval_minutes: 刷新间隔（分钟），默认 20 分钟
+            interval_minutes: 刷新间隔（分钟），默认 10 分钟
         """
         self.interval_minutes = interval_minutes
         self._task: Optional[asyncio.Task] = None
         self._running = False
         self._last_refresh: Optional[datetime] = None
+        self._last_check: Optional[datetime] = None
         self._refresh_count = 0
         self._error_count = 0
         self._last_error: Optional[str] = None
+        self._session_valid: bool = True
+        self._session_username: Optional[str] = None
         self._callbacks: list[Callable] = []
 
     def add_callback(self, callback: Callable):
@@ -87,7 +90,7 @@ class KeepAliveService:
                 await asyncio.sleep(60)
 
     async def _do_refresh(self):
-        """执行一次刷新"""
+        """执行一次刷新检查"""
         try:
             config = load_config()
 
@@ -96,20 +99,38 @@ class KeepAliveService:
                 print("[KeepAlive] 未登录，跳过刷新")
                 return
 
-            print(f"[KeepAlive] 正在刷新 Session... ({datetime.now().strftime('%H:%M:%S')})")
+            print(f"[KeepAlive] 正在检查 Session 状态... ({datetime.now().strftime('%H:%M:%S')})")
 
-            # 调用 getoxsrf 接口刷新 JWT
-            # 这个调用会验证并刷新 session
+            # 1. 首先检查 session 是否有效（通过 list-sessions 接口）
+            session_status = check_session_status(config)
+            self._last_check = datetime.now()
+            self._session_valid = session_status.get("valid", False)
+            self._session_username = session_status.get("username")
+
+            if session_status.get("expired", False):
+                print(f"[KeepAlive] Session 已过期")
+                self._last_error = "Session 已过期"
+                self._notify("expired", {"error": "Session 已过期"})
+                return
+
+            if session_status.get("error"):
+                print(f"[KeepAlive] 检查 Session 状态失败: {session_status['error']}")
+                self._error_count += 1
+                self._last_error = session_status["error"]
+                return
+
+            # 2. Session 有效，刷新 JWT
             result = _get_jwt_via_api(config)
 
             self._last_refresh = datetime.now()
             self._refresh_count += 1
             self._last_error = None
 
-            print(f"[KeepAlive] 刷新成功 (第 {self._refresh_count} 次)")
+            print(f"[KeepAlive] 刷新成功 (第 {self._refresh_count} 次) - 用户: {self._session_username}")
             self._notify("refreshed", {
                 "count": self._refresh_count,
-                "time": self._last_refresh.isoformat()
+                "time": self._last_refresh.isoformat(),
+                "username": self._session_username,
             })
 
         except Exception as e:
@@ -120,6 +141,7 @@ class KeepAliveService:
             # 检查是否是 session 过期
             if "expired" in error_msg.lower() or "401" in error_msg:
                 print(f"[KeepAlive] Session 已过期，需要重新登录")
+                self._session_valid = False
                 self._notify("expired", {"error": error_msg})
             else:
                 print(f"[KeepAlive] 刷新失败: {error_msg}")
@@ -146,9 +168,12 @@ class KeepAliveService:
             "running": self._running,
             "interval_minutes": self.interval_minutes,
             "last_refresh": self._last_refresh.isoformat() if self._last_refresh else None,
+            "last_check": self._last_check.isoformat() if self._last_check else None,
             "refresh_count": self._refresh_count,
             "error_count": self._error_count,
-            "last_error": self._last_error
+            "last_error": self._last_error,
+            "session_valid": self._session_valid,
+            "session_username": self._session_username,
         }
 
 
@@ -156,7 +181,7 @@ class KeepAliveService:
 _keep_alive_service: Optional[KeepAliveService] = None
 
 
-def get_keep_alive_service(interval_minutes: int = 20) -> KeepAliveService:
+def get_keep_alive_service(interval_minutes: int = 10) -> KeepAliveService:
     """获取全局保活服务实例"""
     global _keep_alive_service
     if _keep_alive_service is None:

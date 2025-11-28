@@ -250,8 +250,12 @@ def cookies_age_seconds(config: dict) -> Optional[float]:
     return (datetime.now() - dt).total_seconds()
 
 
-def cookies_expired(config: dict, max_age_hours: int = 24) -> bool:
-    """判断 cookie 是否超过 max_age_hours。"""
+def cookies_expired(config: dict, max_age_hours: int = 0) -> bool:
+    """判断 cookie 是否超过 max_age_hours。
+
+    注意：此函数已废弃，建议使用 auth.check_session_status() 检查真实的 session 状态。
+    默认 max_age_hours=0 表示不进行时间检查（始终返回 False）。
+    """
     if max_age_hours <= 0:
         return False
     age = cookies_age_seconds(config)

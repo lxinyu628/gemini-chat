@@ -19,6 +19,7 @@ from .config import (
 )
 
 GETOXSRF_URL = "https://business.gemini.google/auth/getoxsrf"
+LIST_SESSIONS_URL = "https://auth.business.gemini.google/list-sessions"
 
 
 def url_safe_b64encode(data: bytes) -> str:
@@ -77,6 +78,117 @@ def create_jwt(
     signature_b64 = url_safe_b64encode(signature)
     token = f"{message}.{signature_b64}"
     return token, float(now + lifetime)
+
+
+def check_session_status(config: Optional[dict] = None) -> dict:
+    """通过 list-sessions 接口检查 session 是否过期。
+
+    返回:
+        {
+            "valid": bool,          # session 是否有效
+            "expired": bool,        # session 是否已过期
+            "username": str,        # 用户名/邮箱
+            "error": str | None,    # 错误信息
+        }
+    """
+    if config is None:
+        config = load_config()
+
+    secure_c_ses = config.get("secure_c_ses")
+    host_c_oses = config.get("host_c_oses")
+    csesidx = config.get("csesidx")
+
+    if not secure_c_ses or not csesidx:
+        return {
+            "valid": False,
+            "expired": True,
+            "username": None,
+            "error": "缺少凭证信息",
+        }
+
+    proxy = get_proxy(config)
+    cookie_str = f"__Secure-C_SES={secure_c_ses}"
+    if host_c_oses:
+        cookie_str += f"; __Host-C_OSES={host_c_oses}"
+
+    url = f"{LIST_SESSIONS_URL}?csesidx={csesidx}&rt=json"
+
+    client_kwargs = {
+        "verify": False,
+        "follow_redirects": False,
+        "timeout": 30.0,
+    }
+    if proxy:
+        client_kwargs["proxy"] = proxy
+
+    try:
+        with httpx.Client(**client_kwargs) as client:
+            resp = client.get(
+                url,
+                headers={
+                    "accept": "*/*",
+                    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "cookie": cookie_str,
+                },
+            )
+
+        if resp.status_code != 200:
+            return {
+                "valid": False,
+                "expired": True,
+                "username": None,
+                "error": f"HTTP {resp.status_code}",
+            }
+
+        text = resp.text
+        # 处理可能的前缀
+        if text.startswith(")]}'"):
+            text = text[4:].strip()
+
+        data = json.loads(text)
+        sessions = data.get("sessions", [])
+
+        # 查找当前 session
+        current_session = None
+        for sess in sessions:
+            if sess.get("csesidx") == csesidx:
+                current_session = sess
+                break
+
+        if not current_session and sessions:
+            # 如果没找到匹配的，使用第一个
+            current_session = sessions[0]
+
+        if current_session:
+            is_expired = current_session.get("expired", False)
+            return {
+                "valid": not is_expired,
+                "expired": is_expired,
+                "username": current_session.get("subject") or current_session.get("displayName"),
+                "error": None,
+            }
+
+        return {
+            "valid": False,
+            "expired": True,
+            "username": None,
+            "error": "未找到 session 信息",
+        }
+
+    except json.JSONDecodeError as e:
+        return {
+            "valid": False,
+            "expired": True,
+            "username": None,
+            "error": f"JSON 解析失败: {e}",
+        }
+    except Exception as e:
+        return {
+            "valid": False,
+            "expired": True,
+            "username": None,
+            "error": str(e),
+        }
 
 
 def _get_jwt_via_api(config: Optional[dict] = None) -> dict:
