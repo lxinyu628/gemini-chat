@@ -95,7 +95,6 @@ def check_session_status(config: Optional[dict] = None) -> dict:
         config = load_config()
 
     secure_c_ses = config.get("secure_c_ses")
-    host_c_oses = config.get("host_c_oses")
     csesidx = config.get("csesidx")
 
     if not secure_c_ses or not csesidx:
@@ -107,9 +106,9 @@ def check_session_status(config: Optional[dict] = None) -> dict:
         }
 
     proxy = get_proxy(config)
+
+    # 只使用 __Secure-C_SES，不使用 __Host-C_OSES（可能导致 UNDECRYPTABLE_COSES 错误）
     cookie_str = f"__Secure-C_SES={secure_c_ses}"
-    if host_c_oses:
-        cookie_str += f"; __Host-C_OSES={host_c_oses}"
 
     url = f"{LIST_SESSIONS_URL}?csesidx={csesidx}&rt=json"
 
@@ -131,6 +130,26 @@ def check_session_status(config: Optional[dict] = None) -> dict:
                     "cookie": cookie_str,
                 },
             )
+
+        # 如果 list-sessions 返回 401，尝试用 getoxsrf 验证
+        if resp.status_code == 401:
+            # 尝试通过 getoxsrf 验证 session 是否有效
+            try:
+                _get_jwt_via_api(config)
+                # 如果 getoxsrf 成功，说明 session 有效
+                return {
+                    "valid": True,
+                    "expired": False,
+                    "username": None,
+                    "error": None,
+                }
+            except Exception:
+                return {
+                    "valid": False,
+                    "expired": True,
+                    "username": None,
+                    "error": "HTTP 401",
+                }
 
         if resp.status_code != 200:
             return {
