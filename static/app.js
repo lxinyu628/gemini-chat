@@ -645,9 +645,277 @@ function showError(message) {
     appendMessage('assistant', `错误: ${message}`);
 }
 
+// ==================== 远程浏览器登录 ====================
+
+// 远程浏览器状态
+const browserState = {
+    ws: null,
+    connected: false,
+    status: 'idle'
+};
+
+// 打开登录模态框
+function openLoginModal() {
+    document.getElementById('expiredModal').classList.remove('show');
+    document.getElementById('loginModal').classList.add('show');
+}
+
+// 关闭登录模态框
+function closeLoginModal() {
+    document.getElementById('loginModal').classList.remove('show');
+    stopBrowser();
+}
+
+// 标签页切换
+document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const tabName = btn.dataset.tab;
+
+        // 更新按钮状态
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+
+        // 更新内容
+        document.querySelectorAll('.tab-content').forEach(content => {
+            content.classList.remove('active');
+        });
+        document.getElementById(tabName + 'Tab').classList.add('active');
+    });
+});
+
+// 启动远程浏览器
+document.getElementById('startBrowserBtn').addEventListener('click', startBrowser);
+document.getElementById('stopBrowserBtn').addEventListener('click', stopBrowser);
+
+// 手动保存配置
+document.getElementById('saveManualBtn').addEventListener('click', saveManualConfig);
+
+async function startBrowser() {
+    const statusDiv = document.getElementById('browserStatus');
+    const containerDiv = document.getElementById('browserContainer');
+    const startBtn = document.getElementById('startBrowserBtn');
+    const stopBtn = document.getElementById('stopBrowserBtn');
+    const inputBox = document.getElementById('browserInput');
+
+    statusDiv.innerHTML = '<p>正在连接...</p>';
+    startBtn.disabled = true;
+
+    try {
+        // 获取 WebSocket URL
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws/browser`;
+
+        browserState.ws = new WebSocket(wsUrl);
+
+        browserState.ws.onopen = () => {
+            browserState.connected = true;
+            statusDiv.innerHTML = '<p>浏览器启动中...</p>';
+        };
+
+        browserState.ws.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+            handleBrowserMessage(data);
+        };
+
+        browserState.ws.onclose = () => {
+            browserState.connected = false;
+            browserState.ws = null;
+            containerDiv.style.display = 'none';
+            statusDiv.style.display = 'block';
+            statusDiv.innerHTML = '<p>浏览器已断开连接</p>';
+            startBtn.style.display = 'inline-block';
+            startBtn.disabled = false;
+            stopBtn.style.display = 'none';
+            inputBox.style.display = 'none';
+        };
+
+        browserState.ws.onerror = (error) => {
+            console.error('WebSocket 错误:', error);
+            statusDiv.innerHTML = '<p>连接失败，请重试</p>';
+            startBtn.disabled = false;
+        };
+
+    } catch (error) {
+        console.error('启动浏览器失败:', error);
+        statusDiv.innerHTML = `<p>启动失败: ${error.message}</p>`;
+        startBtn.disabled = false;
+    }
+}
+
+function stopBrowser() {
+    if (browserState.ws) {
+        browserState.ws.send(JSON.stringify({ action: 'stop' }));
+        browserState.ws.close();
+        browserState.ws = null;
+    }
+}
+
+function handleBrowserMessage(data) {
+    const statusDiv = document.getElementById('browserStatus');
+    const containerDiv = document.getElementById('browserContainer');
+    const screenImg = document.getElementById('browserScreen');
+    const startBtn = document.getElementById('startBrowserBtn');
+    const stopBtn = document.getElementById('stopBrowserBtn');
+    const inputBox = document.getElementById('browserInput');
+
+    switch (data.type) {
+        case 'status':
+            browserState.status = data.status;
+            if (data.status === 'running') {
+                statusDiv.style.display = 'none';
+                containerDiv.style.display = 'block';
+                startBtn.style.display = 'none';
+                stopBtn.style.display = 'inline-block';
+                inputBox.style.display = 'block';
+            } else if (data.status === 'login_success') {
+                statusDiv.style.display = 'block';
+                statusDiv.innerHTML = `<p style="color: green;">${data.message}</p><button class="btn btn-primary" onclick="saveAndClose()">保存并关闭</button>`;
+            } else {
+                statusDiv.innerHTML = `<p>${data.message}</p>`;
+            }
+            break;
+
+        case 'screenshot':
+            screenImg.src = 'data:image/jpeg;base64,' + data.data;
+            break;
+
+        case 'login_success':
+            statusDiv.style.display = 'block';
+            containerDiv.style.display = 'none';
+            statusDiv.innerHTML = `
+                <p style="color: green;">登录成功！</p>
+                <button class="btn btn-primary" onclick="saveAndClose()">保存配置并关闭</button>
+            `;
+            break;
+
+        case 'config_saved':
+            if (data.success) {
+                alert('配置已保存！页面将刷新。');
+                location.reload();
+            } else {
+                alert('保存失败: ' + data.message);
+            }
+            break;
+    }
+}
+
+function saveAndClose() {
+    if (browserState.ws && browserState.connected) {
+        browserState.ws.send(JSON.stringify({ action: 'save_config' }));
+    }
+}
+
+// 浏览器屏幕点击处理
+document.getElementById('browserScreen').addEventListener('click', (e) => {
+    if (!browserState.ws || !browserState.connected) return;
+
+    const rect = e.target.getBoundingClientRect();
+    const scaleX = 1280 / rect.width;  // 假设服务器端浏览器宽度为 1280
+    const scaleY = 800 / rect.height;  // 假设服务器端浏览器高度为 800
+
+    const x = Math.round((e.clientX - rect.left) * scaleX);
+    const y = Math.round((e.clientY - rect.top) * scaleY);
+
+    browserState.ws.send(JSON.stringify({
+        action: 'click',
+        x: x,
+        y: y
+    }));
+});
+
+// 浏览器输入框处理
+document.getElementById('browserInput').addEventListener('keydown', (e) => {
+    if (!browserState.ws || !browserState.connected) return;
+
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        const text = e.target.value;
+        if (text) {
+            browserState.ws.send(JSON.stringify({
+                action: 'type',
+                text: text
+            }));
+            e.target.value = '';
+        }
+        // 同时发送 Enter 键
+        browserState.ws.send(JSON.stringify({
+            action: 'key',
+            key: 'Enter'
+        }));
+    } else if (e.key === 'Escape') {
+        browserState.ws.send(JSON.stringify({
+            action: 'key',
+            key: 'Escape'
+        }));
+    } else if (e.key === 'Tab') {
+        e.preventDefault();
+        browserState.ws.send(JSON.stringify({
+            action: 'key',
+            key: 'Tab'
+        }));
+    } else if (e.key === 'Backspace') {
+        browserState.ws.send(JSON.stringify({
+            action: 'key',
+            key: 'Backspace'
+        }));
+    }
+});
+
+// 浏览器屏幕滚动处理
+document.getElementById('browserScreen').addEventListener('wheel', (e) => {
+    if (!browserState.ws || !browserState.connected) return;
+
+    e.preventDefault();
+    browserState.ws.send(JSON.stringify({
+        action: 'scroll',
+        deltaX: e.deltaX,
+        deltaY: e.deltaY
+    }));
+});
+
+// 手动保存配置
+async function saveManualConfig() {
+    const config = {
+        secure_c_ses: document.getElementById('manualSecureCses').value.trim(),
+        csesidx: document.getElementById('manualCsesidx').value.trim(),
+        group_id: document.getElementById('manualGroupId').value.trim(),
+        host_c_oses: document.getElementById('manualHostCoses').value.trim()
+    };
+
+    if (!config.secure_c_ses || !config.csesidx || !config.group_id) {
+        alert('请填写必要字段：secure_c_ses, csesidx, group_id');
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/session/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(config)
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            alert('配置已保存！页面将刷新。');
+            location.reload();
+        } else {
+            alert('保存失败: ' + (result.error || '未知错误'));
+        }
+    } catch (error) {
+        alert('保存失败: ' + error.message);
+    }
+}
+
+// 状态指示器点击打开登录
+document.getElementById('statusIndicator').addEventListener('click', () => {
+    openLoginModal();
+});
+
 // 清理
 window.addEventListener('beforeunload', () => {
     if (state.statusCheckInterval) {
         clearInterval(state.statusCheckInterval);
     }
+    stopBrowser();
 });

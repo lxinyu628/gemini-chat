@@ -5,7 +5,7 @@ import time
 import uuid
 from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -13,9 +13,10 @@ from pydantic import BaseModel
 
 from biz_gemini.auth import JWTManager
 from biz_gemini.biz_client import BizGeminiClient
-from biz_gemini.config import cookies_age_seconds, cookies_expired, load_config, reload_config
+from biz_gemini.config import cookies_age_seconds, cookies_expired, load_config, reload_config, save_config
 from biz_gemini.openai_adapter import OpenAICompatClient
 from biz_gemini.web_login import get_login_service
+from biz_gemini.remote_browser import get_browser_service, BrowserSessionStatus
 from config_watcher import start_config_watcher, stop_config_watcher
 
 app = FastAPI(title="Gemini Chat API", version="1.0.0")
@@ -779,6 +780,178 @@ async def download_session_image(session_id: str, file_id: str, session_name: st
     except Exception as e:
         print(f"下载图片失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== 远程浏览器登录 ====================
+
+@app.websocket("/ws/browser")
+async def browser_websocket(websocket: WebSocket):
+    """远程浏览器 WebSocket 端点"""
+    await websocket.accept()
+
+    browser_service = get_browser_service()
+    session = await browser_service.create_session()
+
+    # 消息发送回调
+    async def send_message(message: dict):
+        try:
+            await websocket.send_json(message)
+        except Exception as e:
+            print(f"WebSocket 发送消息失败: {e}")
+
+    session.subscribe(send_message)
+
+    try:
+        # 启动浏览器
+        success = await session.start()
+        if not success:
+            await websocket.close()
+            return
+
+        # 处理客户端消息
+        while True:
+            try:
+                data = await websocket.receive_json()
+                action = data.get("action")
+
+                if action == "click":
+                    x = data.get("x", 0)
+                    y = data.get("y", 0)
+                    await session.click(x, y)
+
+                elif action == "type":
+                    text = data.get("text", "")
+                    await session.type_text(text)
+
+                elif action == "key":
+                    key = data.get("key", "")
+                    await session.press_key(key)
+
+                elif action == "scroll":
+                    delta_x = data.get("deltaX", 0)
+                    delta_y = data.get("deltaY", 0)
+                    await session.scroll(delta_x, delta_y)
+
+                elif action == "navigate":
+                    url = data.get("url", "")
+                    await session.navigate(url)
+
+                elif action == "stop":
+                    break
+
+                elif action == "save_config":
+                    # 保存登录配置
+                    config = session.get_login_config()
+                    if config:
+                        save_config(config)
+                        await send_message({
+                            "type": "config_saved",
+                            "success": True,
+                            "message": "配置已保存"
+                        })
+                    else:
+                        await send_message({
+                            "type": "config_saved",
+                            "success": False,
+                            "message": "没有可保存的配置"
+                        })
+
+            except WebSocketDisconnect:
+                break
+            except Exception as e:
+                print(f"处理 WebSocket 消息错误: {e}")
+
+    finally:
+        session.unsubscribe(send_message)
+        await session.stop()
+
+
+@app.post("/api/browser/start")
+async def start_browser():
+    """启动远程浏览器（REST API 方式）"""
+    browser_service = get_browser_service()
+    session = await browser_service.get_active_session()
+
+    if session and session.status in (BrowserSessionStatus.STARTING, BrowserSessionStatus.RUNNING):
+        return {
+            "success": True,
+            "session_id": session.session_id,
+            "status": session.status.value,
+            "message": "浏览器已在运行"
+        }
+
+    session = await browser_service.create_session()
+    return {
+        "success": True,
+        "session_id": session.session_id,
+        "message": "请通过 WebSocket 连接 /ws/browser 进行操作"
+    }
+
+
+@app.post("/api/browser/stop")
+async def stop_browser():
+    """停止远程浏览器"""
+    browser_service = get_browser_service()
+    session = await browser_service.get_active_session()
+
+    if session:
+        await session.stop()
+        return {"success": True, "message": "浏览器已停止"}
+
+    return {"success": False, "message": "没有运行中的浏览器"}
+
+
+@app.get("/api/browser/status")
+async def browser_status():
+    """获取远程浏览器状态"""
+    browser_service = get_browser_service()
+    session = await browser_service.get_active_session()
+
+    if session:
+        return {
+            "active": True,
+            "session_id": session.session_id,
+            "status": session.status.value,
+            "message": session.message
+        }
+
+    return {
+        "active": False,
+        "message": "没有活跃的浏览器会话"
+    }
+
+
+@app.post("/api/session/update")
+async def update_session_config(config: dict):
+    """手动更新登录配置（用于手动粘贴 Cookie）"""
+    try:
+        required_fields = ["secure_c_ses", "csesidx", "group_id"]
+        missing = [f for f in required_fields if not config.get(f)]
+
+        if missing:
+            return {
+                "success": False,
+                "error": f"缺少必要字段: {', '.join(missing)}"
+            }
+
+        # 添加保存时间
+        from datetime import datetime
+        config["cookies_saved_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        save_config(config)
+
+        # 清除现有的会话缓存，强制使用新配置
+        sessions.clear()
+
+        return {
+            "success": True,
+            "message": "配置已更新"
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
 
 
 # 挂载静态文件
