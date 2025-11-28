@@ -10,6 +10,7 @@ ENV/
 *.egg-info/
 dist/
 build/
+.claude/
 
 # 配置文件（敏感信息）
 config.json

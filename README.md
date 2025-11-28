@@ -357,18 +357,6 @@ python app.py login
    python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(headless=True); print('OK'); b.close(); p.stop()"
    ```
 
-### 8. httpx 版本兼容性问题
-
-如果出现以下错误：
-```
-TypeError: Client.__init__() got an unexpected keyword argument 'proxy'
-```
-
-这是因为 httpx 新版本 API 变化。更新到最新代码即可：
-```bash
-git pull
-```
-
 ## 开发模式
 
 直接运行服务（用于开发和调试）：
