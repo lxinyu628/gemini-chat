@@ -20,7 +20,8 @@
 
 ```bash
 # 克隆项目（或下载项目文件）
-cd /path/to/gemini
+git clone https://github.com/ccpopy/gemini-chat.git
+cd gemini-chat
 
 # 创建虚拟环境
 python -m venv venv
