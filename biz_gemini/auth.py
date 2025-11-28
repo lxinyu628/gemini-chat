@@ -96,6 +96,7 @@ def check_session_status(config: Optional[dict] = None) -> dict:
 
     secure_c_ses = config.get("secure_c_ses")
     csesidx = config.get("csesidx")
+    nid = config.get("nid")
 
     if not secure_c_ses or not csesidx:
         return {
@@ -107,8 +108,10 @@ def check_session_status(config: Optional[dict] = None) -> dict:
 
     proxy = get_proxy(config)
 
-    # 只使用 __Secure-C_SES，不使用 __Host-C_OSES（可能导致 UNDECRYPTABLE_COSES 错误）
+    # 使用 __Secure-C_SES 和 NID
     cookie_str = f"__Secure-C_SES={secure_c_ses}"
+    if nid:
+        cookie_str += f"; NID={nid}"
 
     url = f"{LIST_SESSIONS_URL}?csesidx={csesidx}&rt=json"
 
@@ -223,6 +226,7 @@ def _get_jwt_via_api(config: Optional[dict] = None) -> dict:
 
     secure_c_ses = config.get("secure_c_ses")
     host_c_oses = config.get("host_c_oses")
+    nid = config.get("nid")
     csesidx = config.get("csesidx")
     if not secure_c_ses or not csesidx:
         raise ValueError("缺少 secure_c_ses / csesidx，请先运行 `python app.py login`")
@@ -231,6 +235,8 @@ def _get_jwt_via_api(config: Optional[dict] = None) -> dict:
     cookie_str = f"__Secure-C_SES={secure_c_ses}"
     if host_c_oses:
         cookie_str += f"; __Host-C_OSES={host_c_oses}"
+    if nid:
+        cookie_str += f"; NID={nid}"
 
     url = f"{GETOXSRF_URL}?csesidx={csesidx}"
 
@@ -398,20 +404,25 @@ async def login_via_browser() -> dict:
         cookies = await context.cookies()
         secure_c_ses = None
         host_c_oses = None
+        nid = None
         for cookie in cookies:
             if cookie["name"] == "__Secure-C_SES":
                 secure_c_ses = cookie["value"]
             elif cookie["name"] == "__Host-C_OSES":
                 host_c_oses = cookie["value"]
+            elif cookie["name"] == "NID":
+                nid = cookie["value"]
 
         print(f"[+] csesidx: {csesidx}")
         print(f"[+] GROUP_ID: {group_id}")
+        print(f"[+] NID: {'已获取' if nid else '未获取'}")
         print("[+] Cookies 已获取")
 
         now_str = datetime.now().strftime(TIME_FMT)
         new_cfg = {
             "secure_c_ses": secure_c_ses,
             "host_c_oses": host_c_oses,
+            "nid": nid,
             "csesidx": csesidx,
             "group_id": group_id,
             "proxy": proxy,

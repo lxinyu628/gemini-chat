@@ -212,6 +212,7 @@ async def debug_session_status():
     config = load_config()
     secure_c_ses = config.get("secure_c_ses")
     host_c_oses = config.get("host_c_oses")
+    nid = config.get("nid")
     csesidx = config.get("csesidx")
 
     if not secure_c_ses or not csesidx:
@@ -220,6 +221,8 @@ async def debug_session_status():
     cookie_str = f"__Secure-C_SES={secure_c_ses}"
     if host_c_oses:
         cookie_str += f"; __Host-C_OSES={host_c_oses}"
+    if nid:
+        cookie_str += f"; NID={nid}"
 
     url = f"https://auth.business.gemini.google/list-sessions?csesidx={csesidx}&rt=json"
     proxy = get_proxy(config)
