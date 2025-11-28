@@ -393,6 +393,10 @@ uvicorn server:app --reload --host 0.0.0.0 --port 8000
    - 使用 Prometheus + Grafana 监控服务状态
    - 配置告警规则
 
+## 🌟 Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=ccpopy/gemini-chat&type=Date)](https://www.star-history.com/#ccpopy/gemini-chat&Date)
+
 ## 许可证
 
 MIT License
