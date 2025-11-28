@@ -1,5 +1,10 @@
 # Business Gemini API 服务
 
+[![GitHub stars](https://img.shields.io/github/stars/ccpopy/gemini-chat?style=social)](https://github.com/ccpopy/gemini-chat)
+[![GitHub forks](https://img.shields.io/github/forks/ccpopy/gemini-chat?style=social)](https://github.com/ccpopy/gemini-chat/fork)
+[![GitHub issues](https://img.shields.io/github/issues/ccpopy/gemini-chat)](https://github.com/ccpopy/gemini-chat/issues)
+[![License](https://img.shields.io/github/license/ccpopy/gemini-chat)](https://github.com/ccpopy/gemini-chat/blob/main/LICENSE)
+
 生产级的 Google Business Gemini API 服务，提供 OpenAI 兼容的聊天接口和 Web 管理界面。
 
 ## 特性
