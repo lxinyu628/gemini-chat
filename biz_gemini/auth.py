@@ -97,12 +97,16 @@ def _get_jwt_via_api(config: Optional[dict] = None) -> dict:
 
     url = f"{GETOXSRF_URL}?csesidx={csesidx}"
 
-    with httpx.Client(
-        proxy=proxy,
-        verify=False,
-        follow_redirects=False,
-        timeout=30.0,
-    ) as client:
+    # 构建 httpx 客户端参数，proxy=None 时不传该参数
+    client_kwargs = {
+        "verify": False,
+        "follow_redirects": False,
+        "timeout": 30.0,
+    }
+    if proxy:
+        client_kwargs["proxy"] = proxy
+
+    with httpx.Client(**client_kwargs) as client:
         resp = client.get(
             url,
             headers={
