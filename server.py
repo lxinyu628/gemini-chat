@@ -1069,9 +1069,15 @@ async def browser_status():
 
 @app.post("/api/session/update")
 async def update_session_config(config: dict):
-    """手动更新登录配置（用于手动粘贴 Cookie）"""
+    """手动更新登录配置（用于手动粘贴 Cookie）
+
+    只需要提供 secure_c_ses 和 group_id，csesidx 会自动获取
+    """
+    import httpx
+
     try:
-        required_fields = ["secure_c_ses", "csesidx", "group_id"]
+        # 只需要 secure_c_ses 和 group_id
+        required_fields = ["secure_c_ses", "group_id"]
         missing = [f for f in required_fields if not config.get(f)]
 
         if missing:
@@ -1080,18 +1086,92 @@ async def update_session_config(config: dict):
                 "error": f"缺少必要字段: {', '.join(missing)}"
             }
 
+        secure_c_ses = config.get("secure_c_ses")
+        host_c_oses = config.get("host_c_oses", "")
+        nid = config.get("nid", "")
+
+        # 如果没有提供 csesidx，自动从 list-sessions 获取
+        csesidx = config.get("csesidx", "")
+        if not csesidx:
+            # 构造 cookie 字符串
+            cookie_str = f"__Secure-C_SES={secure_c_ses}"
+            if host_c_oses:
+                cookie_str += f"; __Host-C_OSES={host_c_oses}"
+            if nid:
+                cookie_str += f"; NID={nid}"
+
+            # 调用 list-sessions API 获取 csesidx
+            proxy = get_proxy(load_config())
+            client_kwargs = {"verify": False, "timeout": 30.0}
+            if proxy:
+                client_kwargs["proxy"] = proxy
+
+            try:
+                async with httpx.AsyncClient(**client_kwargs) as client:
+                    # 先尝试不带 csesidx 参数
+                    resp = await client.get(
+                        "https://auth.business.gemini.google/list-sessions?rt=json",
+                        headers={
+                            "accept": "*/*",
+                            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                            "origin": "https://business.gemini.google",
+                            "referer": "https://business.gemini.google/",
+                            "cookie": cookie_str,
+                        },
+                    )
+
+                    if resp.status_code == 200:
+                        text = resp.text
+                        if text.startswith(")]}'"):
+                            text = text[4:].strip()
+
+                        import json
+                        data = json.loads(text)
+                        sessions_list = data.get("sessions", [])
+
+                        if sessions_list:
+                            # 使用第一个（通常是当前活跃的）session 的 csesidx
+                            csesidx = str(sessions_list[0].get("csesidx", ""))
+                            # 同时尝试获取 NID（如果响应头中有 Set-Cookie）
+                            # 注意：NID 通常不在 list-sessions 响应中
+
+                        if not csesidx:
+                            return {
+                                "success": False,
+                                "error": "无法自动获取 csesidx，请手动输入"
+                            }
+                    else:
+                        return {
+                            "success": False,
+                            "error": f"验证凭证失败: HTTP {resp.status_code}，请检查 Cookie 是否正确"
+                        }
+
+            except Exception as e:
+                return {
+                    "success": False,
+                    "error": f"自动获取 csesidx 失败: {str(e)}，请手动输入"
+                }
+
         # 添加保存时间
         from datetime import datetime
-        config["cookies_saved_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        final_config = {
+            "secure_c_ses": secure_c_ses,
+            "host_c_oses": host_c_oses,
+            "nid": nid,
+            "csesidx": csesidx,
+            "group_id": config.get("group_id"),
+            "cookies_saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
 
-        save_config(config)
+        save_config(final_config)
 
         # 清除现有的会话缓存，强制使用新配置
         sessions.clear()
 
         return {
             "success": True,
-            "message": "配置已更新"
+            "message": "配置已更新",
+            "csesidx": csesidx  # 返回获取到的 csesidx
         }
     except Exception as e:
         return {

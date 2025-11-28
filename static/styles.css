@@ -1091,3 +1091,176 @@ body {
     font-size: 32px;
   }
 }
+
+/* Toast 通知样式 */
+.toast-container {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px 16px;
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  min-width: 300px;
+  max-width: 420px;
+  pointer-events: auto;
+  animation: toastSlideIn 0.3s ease-out;
+}
+
+.toast.toast-hiding {
+  animation: toastSlideOut 0.3s ease-in forwards;
+}
+
+@keyframes toastSlideIn {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes toastSlideOut {
+  from {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+}
+
+.toast-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.toast-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.toast-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.toast-message {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.toast-close {
+  background: none;
+  border: none;
+  padding: 4px;
+  cursor: pointer;
+  color: var(--text-tertiary);
+  border-radius: 4px;
+  transition: background-color 0.2s, color 0.2s;
+}
+
+.toast-close:hover {
+  background-color: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+/* Toast 类型样式 */
+.toast.toast-success {
+  border-left: 4px solid var(--success-color);
+}
+
+.toast.toast-success .toast-icon {
+  color: var(--success-color);
+}
+
+.toast.toast-error {
+  border-left: 4px solid var(--error-color);
+}
+
+.toast.toast-error .toast-icon {
+  color: var(--error-color);
+}
+
+.toast.toast-warning {
+  border-left: 4px solid var(--warning-color);
+}
+
+.toast.toast-warning .toast-icon {
+  color: var(--warning-color);
+}
+
+.toast.toast-info {
+  border-left: 4px solid var(--accent-color);
+}
+
+.toast.toast-info .toast-icon {
+  color: var(--accent-color);
+}
+
+/* 表单必填标记 */
+.form-group label .required {
+  color: var(--error-color);
+  margin-left: 2px;
+}
+
+/* 表单提示文字 */
+.form-group .hint {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-top: 4px;
+}
+
+.form-group .hint b {
+  color: var(--accent-color);
+}
+
+/* 高级选项折叠面板 */
+.advanced-options {
+  margin: 16px 0;
+  padding: 12px;
+  background-color: var(--bg-secondary);
+  border-radius: var(--radius-sm);
+}
+
+.advanced-options summary {
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  user-select: none;
+}
+
+.advanced-options summary:hover {
+  color: var(--accent-color);
+}
+
+.advanced-options[open] summary {
+  margin-bottom: 12px;
+}
+
+.advanced-options .form-group {
+  margin-bottom: 0;
+}
