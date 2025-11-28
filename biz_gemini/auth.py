@@ -116,11 +116,22 @@ def _get_jwt_via_api(config: Optional[dict] = None) -> dict:
             },
         )
 
+    # 检查 HTTP 状态码
+    if resp.status_code != 200:
+        raise ValueError(f"getoxsrf 请求失败: HTTP {resp.status_code}, 响应: {resp.text[:500]}")
+
     text = resp.text
     if text.startswith(")]}'"):
         text = text[4:].strip()
 
-    data = json.loads(text)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"getoxsrf 返回非 JSON 数据: {text[:500]}") from e
+
+    if "keyId" not in data or "xsrfToken" not in data:
+        raise ValueError(f"getoxsrf 返回数据缺少必要字段，可能是 Cookie 已过期，请重新登录。返回内容: {data}")
+
     key_id = data["keyId"]
     xsrf_token = data["xsrfToken"]
     key_bytes = decode_xsrf_token(xsrf_token)
