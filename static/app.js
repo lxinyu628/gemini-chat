@@ -30,6 +30,11 @@ const ToastIcons = {
         <circle cx="12" cy="12" r="10"/>
         <line x1="12" y1="16" x2="12" y2="12"/>
         <line x1="12" y1="8" x2="12.01" y2="8"/>
+    </svg>`,
+    confirm: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="12" cy="12" r="10"/>
+        <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/>
+        <line x1="12" y1="17" x2="12.01" y2="17"/>
     </svg>`
 };
 
@@ -117,6 +122,186 @@ toast.success = (message, title = '成功') => showToast({ type: 'success', titl
 toast.error = (message, title = '错误') => showToast({ type: 'error', title, message });
 toast.warning = (message, title = '警告') => showToast({ type: 'warning', title, message });
 toast.info = (message, title = '提示') => showToast({ type: 'info', title, message });
+
+/**
+ * 显示确认对话框
+ * @param {Object|string} options - 配置选项或消息字符串
+ * @param {string} options.title - 标题
+ * @param {string} options.message - 消息内容
+ * @param {string} options.confirmText - 确认按钮文字，默认 '确定'
+ * @param {string} options.cancelText - 取消按钮文字，默认 '取消'
+ * @param {string} options.type - 类型: 'warning' | 'danger' | 'info'，影响确认按钮颜色
+ * @returns {Promise<boolean>} 用户点击确认返回 true，取消返回 false
+ */
+toast.confirm = function(options) {
+    return new Promise((resolve) => {
+        // 支持简单的字符串参数
+        if (typeof options === 'string') {
+            options = { message: options };
+        }
+
+        const {
+            title = '确认',
+            message = '',
+            confirmText = '确定',
+            cancelText = '取消',
+            type = 'warning'
+        } = options;
+
+        // 创建遮罩层
+        const overlay = document.createElement('div');
+        overlay.className = 'confirm-overlay';
+
+        // 创建对话框
+        const dialog = document.createElement('div');
+        dialog.className = `confirm-dialog confirm-${type}`;
+
+        const icon = ToastIcons[type] || ToastIcons.confirm;
+
+        dialog.innerHTML = `
+            <div class="confirm-header">
+                <div class="confirm-icon">${icon}</div>
+                <div class="confirm-title">${escapeHtml(title)}</div>
+            </div>
+            <div class="confirm-body">
+                <div class="confirm-message">${escapeHtml(message)}</div>
+            </div>
+            <div class="confirm-footer">
+                <button class="btn btn-secondary confirm-cancel">${escapeHtml(cancelText)}</button>
+                <button class="btn btn-primary confirm-ok">${escapeHtml(confirmText)}</button>
+            </div>
+        `;
+
+        // 添加到页面
+        overlay.appendChild(dialog);
+        document.body.appendChild(overlay);
+
+        // 动画显示
+        requestAnimationFrame(() => {
+            overlay.classList.add('show');
+        });
+
+        // 关闭对话框
+        const close = (result) => {
+            overlay.classList.remove('show');
+            setTimeout(() => {
+                document.body.removeChild(overlay);
+                resolve(result);
+            }, 200);
+        };
+
+        // 事件绑定
+        const cancelBtn = dialog.querySelector('.confirm-cancel');
+        const okBtn = dialog.querySelector('.confirm-ok');
+
+        cancelBtn.addEventListener('click', () => close(false));
+        okBtn.addEventListener('click', () => close(true));
+
+        // 点击遮罩关闭
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) {
+                close(false);
+            }
+        });
+
+        // ESC 键关闭
+        const handleKeydown = (e) => {
+            if (e.key === 'Escape') {
+                close(false);
+                document.removeEventListener('keydown', handleKeydown);
+            } else if (e.key === 'Enter') {
+                close(true);
+                document.removeEventListener('keydown', handleKeydown);
+            }
+        };
+        document.addEventListener('keydown', handleKeydown);
+
+        // 自动聚焦确认按钮
+        okBtn.focus();
+    });
+};
+
+/**
+ * 显示带输入框的对话框
+ * @param {Object} options - 配置选项
+ * @returns {Promise<string|null>} 用户输入的值，取消返回 null
+ */
+toast.prompt = function(options) {
+    return new Promise((resolve) => {
+        if (typeof options === 'string') {
+            options = { message: options };
+        }
+
+        const {
+            title = '请输入',
+            message = '',
+            placeholder = '',
+            defaultValue = '',
+            confirmText = '确定',
+            cancelText = '取消'
+        } = options;
+
+        const overlay = document.createElement('div');
+        overlay.className = 'confirm-overlay';
+
+        const dialog = document.createElement('div');
+        dialog.className = 'confirm-dialog confirm-info';
+
+        dialog.innerHTML = `
+            <div class="confirm-header">
+                <div class="confirm-icon">${ToastIcons.info}</div>
+                <div class="confirm-title">${escapeHtml(title)}</div>
+            </div>
+            <div class="confirm-body">
+                ${message ? `<div class="confirm-message">${escapeHtml(message)}</div>` : ''}
+                <input type="text" class="confirm-input" placeholder="${escapeHtml(placeholder)}" value="${escapeHtml(defaultValue)}">
+            </div>
+            <div class="confirm-footer">
+                <button class="btn btn-secondary confirm-cancel">${escapeHtml(cancelText)}</button>
+                <button class="btn btn-primary confirm-ok">${escapeHtml(confirmText)}</button>
+            </div>
+        `;
+
+        overlay.appendChild(dialog);
+        document.body.appendChild(overlay);
+
+        requestAnimationFrame(() => {
+            overlay.classList.add('show');
+        });
+
+        const input = dialog.querySelector('.confirm-input');
+        const cancelBtn = dialog.querySelector('.confirm-cancel');
+        const okBtn = dialog.querySelector('.confirm-ok');
+
+        const close = (result) => {
+            overlay.classList.remove('show');
+            setTimeout(() => {
+                document.body.removeChild(overlay);
+                resolve(result);
+            }, 200);
+        };
+
+        cancelBtn.addEventListener('click', () => close(null));
+        okBtn.addEventListener('click', () => close(input.value));
+
+        input.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                close(input.value);
+            } else if (e.key === 'Escape') {
+                close(null);
+            }
+        });
+
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) {
+                close(null);
+            }
+        });
+
+        input.focus();
+        input.select();
+    });
+};
 
 // 配置 marked（Markdown 渲染器）
 if (typeof marked !== 'undefined') {
@@ -258,21 +443,47 @@ function initEventListeners() {
     });
 
     // 输入框自动调整高度
-    elements.messageInput.addEventListener('input', () => {
-        elements.messageInput.style.height = 'auto';
-        elements.messageInput.style.height = elements.messageInput.scrollHeight + 'px';
-        updateSendButton();
-    });
+    const messageInput = elements.messageInput;
+    const maxHeight = 200;
+    const lineHeight = 24; // 大约一行的高度
 
-    // 回车发送消息
-    elements.messageInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            if (!elements.sendBtn.disabled) {
-                sendMessage();
+    function autoResize() {
+        // 先重置高度以获取正确的 scrollHeight
+        messageInput.style.height = 'auto';
+        const newHeight = Math.min(messageInput.scrollHeight, maxHeight);
+        messageInput.style.height = newHeight + 'px';
+
+        // 当内容超过最大高度时，显示滚动条
+        messageInput.style.overflowY = messageInput.scrollHeight > maxHeight ? 'auto' : 'hidden';
+
+        updateSendButton();
+    }
+
+    messageInput.addEventListener('input', autoResize);
+
+    // 回车发送消息，Shift+Enter 换行
+    messageInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+            if (e.shiftKey) {
+                // Shift+Enter: 允许换行，不做处理
+                return;
+            } else {
+                // Enter: 发送消息
+                e.preventDefault();
+                if (!elements.sendBtn.disabled) {
+                    sendMessage();
+                }
             }
         }
     });
+
+    // 粘贴时自动调整高度
+    messageInput.addEventListener('paste', () => {
+        setTimeout(autoResize, 0);
+    });
+
+    // 初始化高度
+    autoResize();
 }
 
 function toggleSidebar() {
@@ -482,7 +693,15 @@ async function loadConversation(sessionId, sessionName = null) {
 }
 
 async function deleteConversation(sessionId) {
-    if (!confirm('确定要删除这个对话吗？')) {
+    const confirmed = await toast.confirm({
+        title: '删除对话',
+        message: '确定要删除这个对话吗？此操作无法撤销。',
+        confirmText: '删除',
+        cancelText: '取消',
+        type: 'danger'
+    });
+
+    if (!confirmed) {
         return;
     }
 
@@ -561,6 +780,7 @@ async function sendMessage() {
     // 清空输入
     elements.messageInput.value = '';
     elements.messageInput.style.height = 'auto';
+    elements.messageInput.style.overflowY = 'hidden';
     updateSendButton();
 
     // 显示加载指示器

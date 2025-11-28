@@ -83,7 +83,7 @@
                 <div class="file-preview" id="filePreview"></div>
 
                 <div class="input-wrapper">
-                    <textarea id="messageInput" class="message-input" placeholder="输入消息..." rows="1"></textarea>
+                    <textarea id="messageInput" class="message-input" placeholder="输入消息..."></textarea>
 
                     <div class="input-toolbar">
                         <div class="toolbar-left">
@@ -99,6 +99,10 @@
                             <select id="modelSelect" class="toolbar-model-select">
                                 <option value="business-gemini">Business Gemini</option>
                             </select>
+
+                            <span class="input-hint">
+                                <kbd>Enter</kbd> 发送 · <kbd>Shift</kbd>+<kbd>Enter</kbd> 换行
+                            </span>
                         </div>
 
                         <div class="toolbar-right">
@@ -167,11 +171,13 @@
                     <p class="hint">从浏览器开发者工具的 Cookie 和 Network 中获取以下信息：</p>
                     <div class="form-group">
                         <label>__Secure-C_SES <span class="required">*</span></label>
-                        <textarea id="manualSecureCses" rows="2" placeholder="从 Cookie 中复制 __Secure-C_SES 的值"></textarea>
+                        <textarea id="manualSecureCses" rows="2"
+                            placeholder="从 Cookie 中复制 __Secure-C_SES 的值"></textarea>
                     </div>
                     <div class="form-group">
                         <label>group_id <span class="required">*</span></label>
-                        <input type="text" id="manualGroupId" placeholder="从 URL 中获取，格式如: 51518926-c5e4-4372-b9c1-b4e6f2afa7ed">
+                        <input type="text" id="manualGroupId"
+                            placeholder="从 URL 中获取，格式如: 51518926-c5e4-4372-b9c1-b4e6f2afa7ed">
                         <span class="hint">URL 格式: https://business.gemini.google/home/cid/<b>group_id</b>/...</span>
                     </div>
                     <div class="form-group">

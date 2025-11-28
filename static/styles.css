@@ -494,7 +494,7 @@ body {
 }
 
 .input-container {
-  max-width: 800px;
+  max-width: 96%;
   margin: 0 auto;
 }
 
@@ -535,16 +535,18 @@ body {
 .input-wrapper {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 12px 16px;
+  gap: 0;
+  padding: 0;
   background-color: var(--bg-secondary);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
-  transition: border-color 0.2s;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  overflow: hidden;
 }
 
 .input-wrapper:focus-within {
   border-color: var(--accent-color);
+  box-shadow: 0 0 0 2px rgba(26, 115, 232, 0.1);
 }
 
 .message-input {
@@ -559,6 +561,27 @@ body {
   max-height: 200px;
   line-height: 1.5;
   min-height: 24px;
+  padding: 14px 16px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--text-tertiary) transparent;
+  overflow-y: auto;
+}
+
+.message-input::-webkit-scrollbar {
+  width: 6px;
+}
+
+.message-input::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.message-input::-webkit-scrollbar-thumb {
+  background-color: var(--text-tertiary);
+  border-radius: 3px;
+}
+
+.message-input::-webkit-scrollbar-thumb:hover {
+  background-color: var(--text-secondary);
 }
 
 .message-input::placeholder {
@@ -570,8 +593,30 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding-top: 8px;
+  padding: 8px 12px;
   border-top: 1px solid var(--border-color);
+  background-color: var(--bg-tertiary);
+  opacity: 0.9;
+}
+
+.input-toolbar .input-hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.input-toolbar .input-hint kbd {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 5px;
+  font-size: 11px;
+  font-family: inherit;
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  box-shadow: 0 1px 0 var(--border-color);
 }
 
 .toolbar-left {
@@ -1079,6 +1124,11 @@ body {
     padding: 0 16px;
   }
 
+  /* 移动端隐藏快捷键提示 */
+  .input-hint {
+    display: none !important;
+  }
+
   .chat-container {
     padding: 16px;
   }
@@ -1128,6 +1178,7 @@ body {
     transform: translateX(100%);
     opacity: 0;
   }
+
   to {
     transform: translateX(0);
     opacity: 1;
@@ -1139,6 +1190,7 @@ body {
     transform: translateX(0);
     opacity: 1;
   }
+
   to {
     transform: translateX(100%);
     opacity: 0;
@@ -1263,4 +1315,118 @@ body {
 
 .advanced-options .form-group {
   margin-bottom: 0;
+}
+
+/* ==================== 确认对话框样式 ==================== */
+.confirm-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10001;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+}
+
+.confirm-overlay.show {
+  opacity: 1;
+}
+
+.confirm-dialog {
+  background-color: var(--bg-primary);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  min-width: 320px;
+  max-width: 420px;
+  transform: scale(0.9);
+  transition: transform 0.2s ease;
+}
+
+.confirm-overlay.show .confirm-dialog {
+  transform: scale(1);
+}
+
+.confirm-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 20px 20px 0;
+}
+
+.confirm-icon {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.confirm-warning .confirm-icon {
+  color: var(--warning-color);
+}
+
+.confirm-danger .confirm-icon {
+  color: var(--error-color);
+}
+
+.confirm-info .confirm-icon {
+  color: var(--accent-color);
+}
+
+.confirm-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.confirm-body {
+  padding: 16px 20px;
+}
+
+.confirm-message {
+  font-size: 14px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.confirm-input {
+  width: 100%;
+  padding: 10px 12px;
+  margin-top: 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 14px;
+  transition: border-color 0.2s;
+}
+
+.confirm-input:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.confirm-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 0 20px 20px;
+}
+
+.confirm-footer .btn {
+  min-width: 72px;
+}
+
+/* 危险操作的确认按钮 */
+.confirm-danger .confirm-ok {
+  background-color: var(--error-color);
+  border-color: var(--error-color);
+}
+
+.confirm-danger .confirm-ok:hover {
+  background-color: #d32f2f;
+  border-color: #d32f2f;
 }
