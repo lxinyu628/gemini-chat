@@ -18,7 +18,7 @@ python-dotenv==1.0.0
 watchdog==3.0.0
 
 # 数据验证
-pydantic==2.5.0
+pydantic>=2.5.0
 
-# CORS 支持（已包含在 fastapi 中，但显式列出）
+# CORS 支持
 # fastapi 自带 starlette，包含 CORSMiddleware
