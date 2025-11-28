@@ -44,6 +44,11 @@ class RemoteBrowserSession:
 
     async def start(self) -> bool:
         """启动浏览器"""
+        # 防止重复启动
+        if self.status not in (BrowserSessionStatus.IDLE, BrowserSessionStatus.STOPPED, BrowserSessionStatus.ERROR):
+            print(f"[RemoteBrowser] 会话已在运行中，状态: {self.status}")
+            return True  # 已经在运行，返回成功
+
         try:
             self.status = BrowserSessionStatus.STARTING
             self.message = "正在启动浏览器..."
@@ -209,17 +214,21 @@ class RemoteBrowserSession:
             cookies = await self._context.cookies()
             secure_c_ses = None
             host_c_oses = None
+            nid = None
 
             for cookie in cookies:
                 if cookie["name"] == "__Secure-C_SES":
                     secure_c_ses = cookie["value"]
                 elif cookie["name"] == "__Host-C_OSES":
                     host_c_oses = cookie["value"]
+                elif cookie["name"] == "NID":
+                    nid = cookie["value"]
 
             if secure_c_ses and csesidx and group_id:
                 self._login_config = {
                     "secure_c_ses": secure_c_ses,
                     "host_c_oses": host_c_oses,
+                    "nid": nid,
                     "csesidx": csesidx,
                     "group_id": group_id,
                     "cookies_saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),

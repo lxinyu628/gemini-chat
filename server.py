@@ -921,11 +921,34 @@ async def browser_websocket(websocket: WebSocket):
     session.subscribe(send_message)
 
     try:
-        # 启动浏览器
-        success = await session.start()
-        if not success:
-            await websocket.close()
-            return
+        # 只有当会话是 IDLE 状态时才启动浏览器
+        # 如果已经在运行，只需订阅消息即可
+        from biz_gemini.remote_browser import BrowserSessionStatus
+        if session.status == BrowserSessionStatus.IDLE:
+            success = await session.start()
+            if not success:
+                await websocket.close()
+                return
+        elif session.status == BrowserSessionStatus.RUNNING:
+            # 已经在运行，发送当前状态
+            await send_message({
+                "type": "status",
+                "status": session.status.value,
+                "message": session.message,
+            })
+        elif session.status == BrowserSessionStatus.LOGIN_SUCCESS:
+            # 已经登录成功，发送状态和配置
+            await send_message({
+                "type": "status",
+                "status": session.status.value,
+                "message": session.message,
+            })
+            config = session.get_login_config()
+            if config:
+                await send_message({
+                    "type": "login_success",
+                    "config": config,
+                })
 
         # 处理客户端消息
         while True:
@@ -966,8 +989,11 @@ async def browser_websocket(websocket: WebSocket):
                         await send_message({
                             "type": "config_saved",
                             "success": True,
-                            "message": "配置已保存"
+                            "message": "配置已保存，正在关闭浏览器..."
                         })
+                        # 保存成功后自动停止浏览器
+                        await session.stop()
+                        break
                     else:
                         await send_message({
                             "type": "config_saved",
@@ -982,7 +1008,8 @@ async def browser_websocket(websocket: WebSocket):
 
     finally:
         session.unsubscribe(send_message)
-        await session.stop()
+        # 注意：不自动停止浏览器，让用户可以重新连接
+        # 浏览器会在登录成功后或用户手动停止时关闭
 
 
 @app.post("/api/browser/start")
