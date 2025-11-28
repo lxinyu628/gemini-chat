@@ -148,15 +148,16 @@ def check_session_status(config: Optional[dict] = None) -> dict:
         data = json.loads(text)
         sessions = data.get("sessions", [])
 
-        # 查找当前 session
+        # 查找当前 session（注意：csesidx 可能是字符串或数字，统一转为字符串比较）
         current_session = None
+        csesidx_str = str(csesidx)
         for sess in sessions:
-            if sess.get("csesidx") == csesidx:
+            if str(sess.get("csesidx", "")) == csesidx_str:
                 current_session = sess
                 break
 
         if not current_session and sessions:
-            # 如果没找到匹配的，使用第一个
+            # 如果没找到匹配的，使用第一个（通常只有一个登录 session）
             current_session = sessions[0]
 
         if current_session:

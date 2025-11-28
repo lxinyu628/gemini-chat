@@ -178,6 +178,7 @@ async def get_status():
                 "logged_in": False,
                 "expired": True,
                 "message": "登录已过期，请重新运行 python app.py login",
+                "debug": session_status,  # 添加调试信息
             }
 
         if session_status.get("error"):
@@ -185,6 +186,7 @@ async def get_status():
                 "logged_in": True,
                 "warning": True,
                 "message": f"检查状态失败: {session_status['error']}",
+                "debug": session_status,  # 添加调试信息
             }
 
         return {
@@ -199,6 +201,77 @@ async def get_status():
             "logged_in": False,
             "error": str(e),
         }
+
+
+@app.get("/api/debug/session-status")
+async def debug_session_status():
+    """调试端点：查看 list-sessions 原始返回"""
+    import httpx
+    from biz_gemini.config import get_proxy
+
+    config = load_config()
+    secure_c_ses = config.get("secure_c_ses")
+    host_c_oses = config.get("host_c_oses")
+    csesidx = config.get("csesidx")
+
+    if not secure_c_ses or not csesidx:
+        return {"error": "缺少凭证"}
+
+    cookie_str = f"__Secure-C_SES={secure_c_ses}"
+    if host_c_oses:
+        cookie_str += f"; __Host-C_OSES={host_c_oses}"
+
+    url = f"https://auth.business.gemini.google/list-sessions?csesidx={csesidx}&rt=json"
+    proxy = get_proxy(config)
+
+    try:
+        client_kwargs = {"verify": False, "timeout": 30.0}
+        if proxy:
+            client_kwargs["proxy"] = proxy
+
+        with httpx.Client(**client_kwargs) as client:
+            resp = client.get(
+                url,
+                headers={
+                    "accept": "*/*",
+                    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "cookie": cookie_str,
+                },
+            )
+
+        text = resp.text
+        raw_text = text[:500]  # 保存原始文本前500字符用于调试
+        if text.startswith(")]}'"):
+            text = text[4:].strip()
+
+        import json
+        data = json.loads(text)
+
+        # 检查 session 状态
+        sessions = data.get("sessions", [])
+        matched_session = None
+        csesidx_str = str(csesidx)
+        for sess in sessions:
+            if str(sess.get("csesidx", "")) == csesidx_str:
+                matched_session = sess
+                break
+
+        return {
+            "http_status": resp.status_code,
+            "proxy_used": proxy,
+            "csesidx_in_config": csesidx,
+            "csesidx_type": type(csesidx).__name__,
+            "raw_text_preview": raw_text,
+            "raw_response": data,
+            "sessions_count": len(sessions),
+            "matched_session": matched_session,
+            "first_session_csesidx": sessions[0].get("csesidx") if sessions else None,
+            "first_session_csesidx_type": type(sessions[0].get("csesidx")).__name__ if sessions else None,
+            "check_result": check_session_status(config),
+        }
+    except Exception as e:
+        import traceback
+        return {"error": str(e), "traceback": traceback.format_exc()}
 
 
 @app.post("/api/config/reload")

@@ -8,6 +8,8 @@ from typing import Optional, Callable, Dict, Any
 
 from playwright.async_api import async_playwright, Browser, Page, BrowserContext
 
+from .config import load_config, get_proxy
+
 
 class BrowserSessionStatus(str, Enum):
     """浏览器会话状态"""
@@ -47,6 +49,19 @@ class RemoteBrowserSession:
             self.message = "正在启动浏览器..."
             await self._notify_status()
 
+            # 获取代理配置
+            config = load_config()
+            proxy_url = get_proxy(config)
+
+            # Playwright 不支持 socks5h://，转换为 socks5://
+            playwright_proxy = None
+            if proxy_url:
+                if proxy_url.startswith("socks5h://"):
+                    playwright_proxy = {"server": proxy_url.replace("socks5h://", "socks5://", 1)}
+                else:
+                    playwright_proxy = {"server": proxy_url}
+                print(f"[RemoteBrowser] 使用代理: {playwright_proxy['server']}")
+
             self._playwright = await async_playwright().start()
 
             # 启动 Chromium（headless 模式）
@@ -60,11 +75,15 @@ class RemoteBrowserSession:
                 ]
             )
 
-            # 创建上下文
-            self._context = await self._browser.new_context(
-                viewport={"width": self.viewport_width, "height": self.viewport_height},
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
+            # 创建上下文（带代理）
+            context_options = {
+                "viewport": {"width": self.viewport_width, "height": self.viewport_height},
+                "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
+            if playwright_proxy:
+                context_options["proxy"] = playwright_proxy
+
+            self._context = await self._browser.new_context(**context_options)
 
             # 创建页面
             self._page = await self._context.new_page()
@@ -74,9 +93,23 @@ class RemoteBrowserSession:
 
             # 导航到登录页
             self.message = "正在访问 Business Gemini..."
+            if playwright_proxy:
+                self.message += f" (代理: {playwright_proxy['server']})"
             await self._notify_status()
 
-            await self._page.goto("https://business.gemini.google/", timeout=60000)
+            try:
+                await self._page.goto("https://business.gemini.google/", timeout=60000)
+            except Exception as nav_error:
+                error_msg = str(nav_error)
+                if "net::ERR_" in error_msg or "Timeout" in error_msg:
+                    if not playwright_proxy:
+                        self.message = f"访问失败: {error_msg}\n提示: 未配置代理，可能需要代理才能访问"
+                    else:
+                        self.message = f"访问失败: {error_msg}\n提示: 请检查代理配置是否正确"
+                else:
+                    self.message = f"访问失败: {error_msg}"
+                await self._notify_status()
+                raise
 
             self.status = BrowserSessionStatus.RUNNING
             self.message = "浏览器已就绪，请在下方完成登录"
@@ -89,7 +122,8 @@ class RemoteBrowserSession:
 
         except Exception as e:
             self.status = BrowserSessionStatus.ERROR
-            self.message = f"启动失败: {str(e)}"
+            if not self.message.startswith("访问失败"):
+                self.message = f"启动失败: {str(e)}"
             await self._notify_status()
             await self.stop()
             return False
