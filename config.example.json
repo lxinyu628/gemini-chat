@@ -1,0 +1,26 @@
+{
+  "_comment": "Gemini Business API 配置文件示例",
+  "_comment_usage": "复制此文件为 config.json 并填入实际配置",
+  "server": {
+    "_comment": "服务器配置",
+    "host": "0.0.0.0",
+    "port": 8000,
+    "workers": 4,
+    "log_level": "INFO",
+    "reload": false
+  },
+  "proxy": {
+    "_comment": "代理配置 - 留空或设置 enabled=false 则不使用代理",
+    "enabled": true,
+    "url": "socks5h://127.0.0.1:10808",
+    "timeout": 30
+  },
+  "session": {
+    "_comment": "Gemini 会话配置 - 通过登录自动获取",
+    "secure_c_ses": "",
+    "host_c_oses": "",
+    "csesidx": "",
+    "group_id": "",
+    "cookies_saved_at": ""
+  }
+}

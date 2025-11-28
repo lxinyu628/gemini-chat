@@ -1,0 +1,24 @@
+# Web 框架和服务器
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+gunicorn==21.2.0
+python-multipart==0.0.6
+
+# HTTP 客户端
+requests==2.31.0
+httpx==0.25.1
+
+# 浏览器自动化（用于登录）
+playwright==1.40.0
+
+# 配置和环境变量
+python-dotenv==1.0.0
+
+# 文件监控（配置热重载）
+watchdog==3.0.0
+
+# 数据验证
+pydantic==2.5.0
+
+# CORS 支持（已包含在 fastapi 中，但显式列出）
+# fastapi 自带 starlette，包含 CORSMiddleware

@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# 配置文件（敏感信息）
+config.json
+.env
+*.backup
+
+# 日志文件
+log/
+*.log
+
+# 临时文件
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 数据文件
+conversations/
+biz_gemini_images/
+uploads/
+
+# Playwright
+.playwright/
+playwright-report/
+test-results/
+
+# 其他
+*.pid
+.cache/
