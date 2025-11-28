@@ -17,6 +17,7 @@ from biz_gemini.config import cookies_age_seconds, cookies_expired, load_config,
 from biz_gemini.openai_adapter import OpenAICompatClient
 from biz_gemini.web_login import get_login_service
 from biz_gemini.remote_browser import get_browser_service, BrowserSessionStatus
+from biz_gemini.keep_alive import get_keep_alive_service
 from config_watcher import start_config_watcher, stop_config_watcher
 
 app = FastAPI(title="Gemini Chat API", version="1.0.0")
@@ -56,9 +57,20 @@ async def startup_event():
     start_config_watcher(callback=on_config_changed)
     print("[+] 配置监控已启动")
 
+    # 启动 Session 保活服务
+    print("[*] 启动 Session 保活服务...")
+    keep_alive = get_keep_alive_service(interval_minutes=20)
+    await keep_alive.start()
+    print("[+] Session 保活服务已启动（每 20 分钟刷新一次）")
+
 @app.on_event("shutdown")
 async def shutdown_event():
     """应用关闭时执行"""
+    print("[*] 停止 Session 保活服务...")
+    keep_alive = get_keep_alive_service()
+    await keep_alive.stop()
+    print("[+] Session 保活服务已停止")
+
     print("[*] 停止配置文件监控...")
     stop_config_watcher()
     print("[+] 配置监控已停止")
@@ -952,6 +964,43 @@ async def update_session_config(config: dict):
             "success": False,
             "error": str(e)
         }
+
+
+# ==================== Session 保活服务 ====================
+
+@app.get("/api/keep-alive/status")
+async def keep_alive_status():
+    """获取保活服务状态"""
+    service = get_keep_alive_service()
+    return service.get_status()
+
+
+@app.post("/api/keep-alive/refresh")
+async def keep_alive_refresh():
+    """手动触发一次 Session 刷新"""
+    service = get_keep_alive_service()
+    result = await service.refresh_now()
+    return result
+
+
+@app.post("/api/keep-alive/start")
+async def keep_alive_start():
+    """启动保活服务"""
+    service = get_keep_alive_service()
+    if service._running:
+        return {"success": True, "message": "服务已在运行"}
+    await service.start()
+    return {"success": True, "message": "服务已启动"}
+
+
+@app.post("/api/keep-alive/stop")
+async def keep_alive_stop():
+    """停止保活服务"""
+    service = get_keep_alive_service()
+    if not service._running:
+        return {"success": True, "message": "服务未运行"}
+    await service.stop()
+    return {"success": True, "message": "服务已停止"}
 
 
 # 挂载静态文件
