@@ -282,6 +282,93 @@ cat log/error.log
 
 Linux/Mac 使用 `./manage.sh reload`，Windows 需要重启服务。
 
+### 5. Playwright 依赖安装失败
+
+运行 `playwright install chromium --with-deps` 可能会报错：
+
+```
+E: Package 'libasound2' has no installation candidate
+```
+
+**原因**：较新的 Linux 发行版（如 Ubuntu 24.04、Debian 13+）中部分包名发生了变化。
+
+**解决方案**：手动安装依赖后再安装浏览器：
+
+```bash
+# Debian/Ubuntu 系列
+apt install -y libnss3 libnspr4 libxcomposite1 libxdamage1 \
+    libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 libcairo2
+
+# 如果上述命令失败，尝试使用 t64 后缀版本（适用于较新系统）
+apt install -y libnss3 libnspr4 libatk1.0-0t64 libatk-bridge2.0-0t64 \
+    libcups2t64 libatspi2.0-0t64 libxcomposite1 libxdamage1 \
+    libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2t64
+
+# RHEL/CentOS/Fedora 系列
+dnf install -y nss nspr atk at-spi2-atk cups-libs libXcomposite \
+    libXdamage libXfixes libXrandr mesa-libgbm pango cairo alsa-lib
+
+# 然后安装浏览器（不带 --with-deps）
+playwright install chromium
+```
+
+验证安装是否成功：
+```bash
+python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(headless=True); print('OK'); b.close(); p.stop()"
+```
+
+### 6. Cookie/Session 过期
+
+Google Business Gemini 的 Cookie 大约 24 小时过期。当出现以下错误时需要重新登录：
+
+```
+Session has expired
+HTTP 401
+```
+
+**重新登录方法**：
+
+**方式 A：远程浏览器登录（推荐）**
+1. 打开 Web 界面
+2. 点击左下角状态指示器
+3. 选择"远程浏览器"标签，点击"启动浏览器"
+4. 在页面上点击/输入完成 Google 登录
+5. 登录成功后点击"保存配置"
+
+**方式 B：手动输入 Cookie**
+1. 在本地有图形界面的电脑上运行 `python app.py login`
+2. 登录成功后，复制 `config.json` 中的 `session` 部分
+3. 在 Web 界面选择"手动输入"标签，粘贴相关信息
+
+**方式 C：命令行登录（需要图形界面）**
+```bash
+python app.py login
+```
+
+### 7. 远程浏览器连接后立即断开
+
+如果 WebSocket 连接后立即断开（日志显示 `connection open` 后马上 `connection closed`），通常是 Playwright 浏览器启动失败。
+
+检查步骤：
+1. 确认 Chromium 已安装：`playwright install chromium`
+2. 检查系统依赖是否完整（见上方 Ubuntu 24.04 部分）
+3. 手动测试浏览器启动：
+   ```bash
+   python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(headless=True); print('OK'); b.close(); p.stop()"
+   ```
+
+### 8. httpx 版本兼容性问题
+
+如果出现以下错误：
+```
+TypeError: Client.__init__() got an unexpected keyword argument 'proxy'
+```
+
+这是因为 httpx 新版本 API 变化。更新到最新代码即可：
+```bash
+git pull
+```
+
 ## 开发模式
 
 直接运行服务（用于开发和调试）：
