@@ -20,8 +20,9 @@ from biz_gemini.web_login import get_login_service
 from biz_gemini.remote_browser import get_browser_service, BrowserSessionStatus
 from biz_gemini.keep_alive import get_keep_alive_service
 from config_watcher import start_config_watcher, stop_config_watcher
+from version import VERSION, get_version_info, GITHUB_REPO
 
-app = FastAPI(title="Gemini Chat API", version="1.0.0")
+app = FastAPI(title="Gemini Chat API", version=VERSION)
 
 # CORS 配置
 app.add_middleware(
@@ -1346,6 +1347,88 @@ async def keep_alive_stop():
         return {"success": True, "message": "服务未运行"}
     await service.stop()
     return {"success": True, "message": "服务已停止"}
+
+
+# ==================== 版本管理 ====================
+
+@app.get("/api/version")
+async def get_version_endpoint():
+    """获取当前版本信息"""
+    return get_version_info()
+
+
+@app.get("/api/version/check")
+async def check_version_update():
+    """检查是否有新版本
+
+    从 GitHub API 获取最新 release 信息并与当前版本对比。
+    """
+    import httpx
+
+    if not GITHUB_REPO:
+        return {
+            "current_version": VERSION,
+            "check_enabled": False,
+            "message": "版本检测未配置 (GITHUB_REPO 为空)",
+        }
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
+                headers={"Accept": "application/vnd.github.v3+json"},
+            )
+
+            if resp.status_code == 404:
+                return {
+                    "current_version": VERSION,
+                    "has_update": False,
+                    "message": "暂无 Release 发布",
+                }
+
+            if resp.status_code != 200:
+                return {
+                    "current_version": VERSION,
+                    "error": f"GitHub API 错误: {resp.status_code}",
+                }
+
+            data = resp.json()
+            latest_version = data.get("tag_name", "").lstrip("v")
+            release_url = data.get("html_url", "")
+            release_notes = data.get("body", "")
+            published_at = data.get("published_at", "")
+
+            # 简单版本比较
+            has_update = _compare_versions(VERSION, latest_version)
+
+            return {
+                "current_version": VERSION,
+                "latest_version": latest_version,
+                "has_update": has_update,
+                "release_url": release_url,
+                "release_notes": release_notes[:500] if release_notes else "",
+                "published_at": published_at,
+            }
+
+    except Exception as e:
+        return {
+            "current_version": VERSION,
+            "error": str(e),
+        }
+
+
+def _compare_versions(current: str, latest: str) -> bool:
+    """比较版本号，返回 True 表示有更新可用"""
+    try:
+        def parse_version(v: str) -> tuple:
+            parts = v.split(".")
+            return tuple(int(p) for p in parts[:3])
+
+        current_parts = parse_version(current)
+        latest_parts = parse_version(latest)
+        return latest_parts > current_parts
+    except (ValueError, IndexError):
+        return False
 
 
 # 挂载静态文件
