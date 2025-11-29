@@ -871,11 +871,11 @@ async def list_models() -> dict:
     return {
         "object": "list",
         "data": [
-            {"id": "auto", "object": "model", "owned_by": "google", "name": "自动选择", "description": "自动选择最佳模型"},
-            {"id": "gemini-2.5-flash", "object": "model", "owned_by": "google", "name": "Gemini 2.5 Flash", "description": "快速响应，适合日常对话"},
-            {"id": "gemini-2.5-pro", "object": "model", "owned_by": "google", "name": "Gemini 2.5 Pro", "description": "更强推理能力，适合复杂任务"},
-            {"id": "gemini-3-pro-preview", "object": "model", "owned_by": "google", "name": "Gemini 3 Pro Preview", "description": "最新预览版，体验新功能"},
-            {"id": "business-gemini", "object": "model", "owned_by": "google", "name": "Business Gemini", "description": "企业版，稳定可靠"},
+            {"id": "auto", "object": "model", "owned_by": "google", "name": "自动选择", "description": "Gemini Enterprise 会选择最合适的选项"},
+            {"id": "gemini-2.5-flash", "object": "model", "owned_by": "google", "name": "Gemini 2.5 Flash", "description": "适用于执行日常任务"},
+            {"id": "gemini-2.5-pro", "object": "model", "owned_by": "google", "name": "Gemini 2.5 Pro", "description": "最适用于执行复杂任务"},
+            {"id": "gemini-3-pro-preview", "object": "model", "owned_by": "google", "name": "Gemini 3 Pro Preview", "description": "先进的推理模型"},
+            {"id": "business-gemini", "object": "model", "owned_by": "google", "name": "Business Gemini", "description": "默认自动选择"},
         ]
     }
 

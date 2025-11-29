@@ -133,7 +133,7 @@ toast.info = (message, title = '提示') => showToast({ type: 'info', title, mes
  * @param {string} options.type - 类型: 'warning' | 'danger' | 'info'，影响确认按钮颜色
  * @returns {Promise<boolean>} 用户点击确认返回 true，取消返回 false
  */
-toast.confirm = function(options) {
+toast.confirm = function (options) {
     return new Promise((resolve) => {
         // 支持简单的字符串参数
         if (typeof options === 'string') {
@@ -226,7 +226,7 @@ toast.confirm = function(options) {
  * @param {Object} options - 配置选项
  * @returns {Promise<string|null>} 用户输入的值，取消返回 null
  */
-toast.prompt = function(options) {
+toast.prompt = function (options) {
     return new Promise((resolve) => {
         if (typeof options === 'string') {
             options = { message: options };
@@ -306,17 +306,17 @@ toast.prompt = function(options) {
 // 配置 marked（Markdown 渲染器）
 if (typeof marked !== 'undefined') {
     marked.setOptions({
-        highlight: function(code, lang) {
+        highlight: function (code, lang) {
             if (typeof hljs !== 'undefined' && lang && hljs.getLanguage(lang)) {
                 try {
                     return hljs.highlight(code, { language: lang }).value;
-                } catch (e) {}
+                } catch (e) { }
             }
             // 自动检测语言
             if (typeof hljs !== 'undefined') {
                 try {
                     return hljs.highlightAuto(code).value;
-                } catch (e) {}
+                } catch (e) { }
             }
             return code;
         },
@@ -566,10 +566,10 @@ async function loadModels() {
         console.error('加载模型失败:', error);
         // 加载失败时使用默认模型列表
         const defaultModels = [
-            { id: 'auto', name: '自动选择', description: '自动选择最佳模型' },
-            { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: '快速响应' },
-            { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', description: '更强推理能力' },
-            { id: 'business-gemini', name: 'Business Gemini', description: '企业版' }
+            { id: 'auto', name: '自动选择', description: 'Gemini Enterprise 会选择最合适的选项' },
+            { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: '适用于执行日常任务' },
+            { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', description: '最适用于执行复杂任务' },
+            { id: 'gemini-3-pro-preview', name: 'Gemini 3 Pro Preview', description: '先进的推理模型' },
         ];
 
         elements.modelSelect.innerHTML = '';
