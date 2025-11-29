@@ -1,7 +1,7 @@
 """版本信息管理模块"""
 
 # 版本号
-VERSION = "1.0.0"
+VERSION = "1.0.2"
 
 # 版本信息
 VERSION_INFO = {

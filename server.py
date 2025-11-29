@@ -111,7 +111,10 @@ class AnthropicRequest(BaseModel):
     model: str = "gemini-2.5-pro"
     max_tokens: int = 4096
     messages: List[AnthropicMessage]
-    system: Optional[str] = None
+    # system 可以是字符串或 content blocks 数组
+    # 字符串: "You are a helpful assistant"
+    # 数组: [{"type": "text", "text": "You are...", "cache_control": {...}}]
+    system: Optional[Union[str, List[Dict[str, Any]]]] = None
     stream: bool = False
     temperature: Optional[float] = None
     top_p: Optional[float] = None

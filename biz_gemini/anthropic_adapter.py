@@ -12,22 +12,46 @@ from typing import Dict, Generator, List, Optional, Any, Union
 from .biz_client import BizGeminiClient, ChatResponse
 
 
+def _extract_system_text(system: Optional[Union[str, List[Dict]]]) -> Optional[str]:
+    """从 system 参数中提取文本内容。
+
+    system 可以是：
+    - 字符串: "You are a helpful assistant"
+    - 数组: [{"type": "text", "text": "You are...", "cache_control": {...}}]
+    """
+    if system is None:
+        return None
+
+    if isinstance(system, str):
+        return system
+
+    if isinstance(system, list):
+        texts = []
+        for block in system:
+            if isinstance(block, dict) and block.get("type") == "text":
+                texts.append(str(block.get("text", "")))
+        return "\n".join(texts) if texts else None
+
+    return str(system)
+
+
 def _flatten_anthropic_messages(
     messages: List[Dict],
-    system: Optional[str] = None
+    system: Optional[Union[str, List[Dict]]] = None
 ) -> str:
     """将 Anthropic 风格的 messages 转换为纯文本 prompt。
 
     Anthropic 格式:
     - messages: [{"role": "user", "content": "..."}]
     - content 可以是字符串或 content blocks 列表
-    - system 是独立的顶级参数
+    - system 是独立的顶级参数（可以是字符串或数组）
     """
     lines: List[str] = []
 
     # 添加 system prompt（如果有）
-    if system:
-        lines.append(f"[System]\n{system}\n")
+    system_text = _extract_system_text(system)
+    if system_text:
+        lines.append(f"[System]\n{system_text}\n")
 
     for msg in messages:
         role = msg.get("role", "user")
@@ -142,7 +166,7 @@ class AnthropicCompatClient:
             model: Optional[str] = None,
             max_tokens: int = 4096,
             messages: Optional[List[Dict]] = None,
-            system: Optional[str] = None,
+            system: Optional[Union[str, List[Dict]]] = None,
             stream: bool = False,
             temperature: Optional[float] = None,
             top_p: Optional[float] = None,
