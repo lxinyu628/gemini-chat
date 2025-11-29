@@ -536,8 +536,16 @@ class BizGeminiClient:
         message: str,
         session_name: Optional[str] = None,
         model_id: Optional[str] = None,
+        file_ids: Optional[List[str]] = None,
     ) -> requests.Response:
-        """内部方法：调用 widgetStreamAssist，带简单重试。"""
+        """内部方法：调用 widgetStreamAssist，带简单重试。
+
+        Args:
+            message: 用户消息
+            session_name: 会话名称
+            model_id: 模型 ID
+            file_ids: 要包含在请求中的文件 ID 列表
+        """
         session = session_name or self.session_name
 
         for attempt in range(3):
@@ -546,7 +554,7 @@ class BizGeminiClient:
                 "session": session,
                 "query": {"parts": [{"text": message}]},
                 "filter": "",
-                "fileIds": [],
+                "fileIds": file_ids or [],
                 "answerGenerationMode": "NORMAL",
                 "toolsSpec": {
                     "webGroundingSpec": {},
@@ -778,9 +786,20 @@ class BizGeminiClient:
         auto_save_images: bool = True,
         debug: bool = False,
         model_id: Optional[str] = None,
+        file_ids: Optional[List[str]] = None,
     ) -> ChatResponse:
-        """发送一条消息，返回包含文本和图片的完整响应。"""
-        resp = self._do_stream_assist(message, session_name, model_id)
+        """发送一条消息，返回包含文本和图片的完整响应。
+
+        Args:
+            message: 用户消息
+            session_name: 会话名称
+            include_thoughts: 是否包含思考链
+            auto_save_images: 是否自动保存图片
+            debug: 是否开启调试模式
+            model_id: 模型 ID
+            file_ids: 要包含在请求中的文件 ID 列表（用于引用已上传的文件）
+        """
+        resp = self._do_stream_assist(message, session_name, model_id, file_ids)
 
         full_response = ""
         for line in resp.iter_lines():

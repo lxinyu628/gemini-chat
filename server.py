@@ -627,14 +627,16 @@ async def get_session_messages(session_id: str, session_name: str = None):
 
                     # 检查是否有图片文件
                     file_info = content.get("file")
-                    if file_info and file_info.get("fileId"):
-                        file_id = file_info["fileId"]
-                        turn_file_ids.append({
-                            "fileId": file_id,
-                            "mimeType": file_info.get("mimeType", "image/png"),
-                            "fileName": file_info.get("name", ""),
-                        })
-                        all_file_ids.append(file_id)
+                    if file_info:
+                        print(f"[DEBUG] 历史消息中的图片信息: {file_info}")
+                        if file_info.get("fileId"):
+                            file_id = file_info["fileId"]
+                            turn_file_ids.append({
+                                "fileId": file_id,
+                                "mimeType": file_info.get("mimeType", "image/png"),
+                                "fileName": file_info.get("name", ""),
+                            })
+                            all_file_ids.append(file_id)
 
                     if text:
                         if is_thought:
@@ -738,7 +740,9 @@ async def chat_completions(request: ChatRequest):
     session_id = request.session_id or str(uuid.uuid4())
     client, session_data = get_or_create_client(session_id)
 
-    print(f"[DEBUG] 聊天请求: session_id={session_id}, session_name={session_data.get('session_name')}")
+    # 获取待发送的文件 ID
+    pending_file_ids = session_data.get("pending_file_ids", [])
+    print(f"[DEBUG] 聊天请求: session_id={session_id}, session_name={session_data.get('session_name')}, pending_file_ids={pending_file_ids}")
 
     # 保存用户消息
     user_message = request.messages[-1] if request.messages else None
@@ -760,6 +764,10 @@ async def chat_completions(request: ChatRequest):
     if request.stream:
         async def generate():
             try:
+                # 传递 file_ids 并在发送后清空
+                file_ids_to_send = pending_file_ids.copy()
+                session_data["pending_file_ids"] = []
+
                 response = client.chat.completions.create(
                     model=request.model,
                     messages=messages,
@@ -767,6 +775,7 @@ async def chat_completions(request: ChatRequest):
                     include_image_data=request.include_image_data,
                     include_thoughts=request.include_thoughts,
                     embed_images_in_content=request.embed_images_in_content,
+                    file_ids=file_ids_to_send,
                 )
                 full_content = ""
                 images_data = None
@@ -811,6 +820,10 @@ async def chat_completions(request: ChatRequest):
         )
     else:
         try:
+            # 传递 file_ids 并在发送后清空
+            file_ids_to_send = pending_file_ids.copy()
+            session_data["pending_file_ids"] = []
+
             response = client.chat.completions.create(
                 model=request.model,
                 messages=messages,
@@ -818,6 +831,7 @@ async def chat_completions(request: ChatRequest):
                 include_image_data=request.include_image_data,
                 include_thoughts=request.include_thoughts,
                 embed_images_in_content=request.embed_images_in_content,
+                file_ids=file_ids_to_send,
             )
 
             # 调试日志：打印响应内容
@@ -1028,6 +1042,14 @@ async def upload_file(
         )
         print(f"[DEBUG] 文件上传结果: {result}")
 
+        # 保存文件 ID 到会话数据，以便在发送消息时使用
+        file_id = result.get("file_id")
+        if file_id:
+            if "pending_file_ids" not in session_data:
+                session_data["pending_file_ids"] = []
+            session_data["pending_file_ids"].append(file_id)
+            print(f"[DEBUG] 已添加 file_id 到待发送列表: {file_id}, 当前列表: {session_data['pending_file_ids']}")
+
         return {
             "success": True,
             "filename": file.filename,
@@ -1205,23 +1227,14 @@ async def download_session_image(session_id: str, file_id: str, session_name: st
         # 确定 session_name
         target_session_name = session_name or session_id
 
-        # 获取文件元数据以确定文件名和 MIME 类型
-        file_metadata = biz_client._get_session_file_metadata(target_session_name)
-        meta = file_metadata.get(file_id, {})
+        print(f"[DEBUG] 下载图片请求: session_id={session_id}, file_id={file_id}, session_name={target_session_name}")
 
-        file_name = meta.get("name", f"gemini_{file_id}.png")
-        mime_type = meta.get("mimeType", "image/png")
-        full_session = meta.get("session") or target_session_name
-
-        # 检查本地是否已有缓存（使用实际文件名）
-        local_path = os.path.join(IMAGES_DIR, file_name)
-        if os.path.exists(local_path):
-            return FileResponse(local_path, media_type=mime_type)
-
-        # 也检查 gemini_{file_id} 格式的缓存
+        # 先检查本地缓存（按 file_id 匹配文件名）
         for ext in [".png", ".jpg", ".jpeg", ".gif", ".webp"]:
+            # 检查 gemini_{file_id} 格式
             alt_path = os.path.join(IMAGES_DIR, f"gemini_{file_id}{ext}")
             if os.path.exists(alt_path):
+                print(f"[DEBUG] 找到本地缓存: {alt_path}")
                 alt_mime = {
                     ".png": "image/png",
                     ".jpg": "image/jpeg",
@@ -1231,7 +1244,31 @@ async def download_session_image(session_id: str, file_id: str, session_name: st
                 }.get(ext, "image/png")
                 return FileResponse(alt_path, media_type=alt_mime)
 
+        # 获取文件元数据以确定文件名和 MIME 类型
+        file_metadata = biz_client._get_session_file_metadata(target_session_name)
+        print(f"[DEBUG] 获取到的文件元数据 keys: {list(file_metadata.keys())}")
+
+        meta = file_metadata.get(file_id, {})
+        print(f"[DEBUG] file_id={file_id} 的元数据: {meta}")
+
+        if not meta:
+            # 如果没有找到元数据，尝试用不同格式的 filter
+            file_metadata_all = biz_client._get_session_file_metadata(target_session_name, filter_str="")
+            print(f"[DEBUG] 所有文件元数据 keys: {list(file_metadata_all.keys())}")
+            meta = file_metadata_all.get(file_id, {})
+
+        file_name = meta.get("name", f"gemini_{file_id}.png")
+        mime_type = meta.get("mimeType", "image/png")
+        full_session = meta.get("session") or target_session_name
+
+        # 检查本地是否已有缓存（使用实际文件名）
+        local_path = os.path.join(IMAGES_DIR, file_name)
+        if os.path.exists(local_path):
+            print(f"[DEBUG] 找到本地缓存（通过文件名）: {local_path}")
+            return FileResponse(local_path, media_type=mime_type)
+
         # 本地没有缓存，从 Google 下载
+        print(f"[DEBUG] 本地没有缓存，尝试从 Google 下载: file_id={file_id}, session={full_session}")
         image_data = biz_client._download_file_with_jwt(
             download_uri="",
             session_name=full_session,

@@ -231,6 +231,7 @@ class OpenAICompatClient:
             include_image_data: bool = True,
             include_thoughts: bool = False,
             embed_images_in_content: bool = True,
+            file_ids: Optional[List[str]] = None,
             **kwargs,
         ):
             """创建聊天完成。
@@ -245,6 +246,7 @@ class OpenAICompatClient:
                 embed_images_in_content: 是否将图片内嵌到 content 中（默认 True）
                     - True: 兼容 OpenAI 格式，第三方工具可显示图片
                     - False: 图片只在 images 字段返回，避免重复（自定义前端使用）
+                file_ids: 要包含在请求中的文件 ID 列表（用于引用已上传的文件）
             """
             if messages is None:
                 raise ValueError("messages 不能为空")
@@ -262,6 +264,7 @@ class OpenAICompatClient:
                     auto_save_images=True,
                     model_id=model_id,
                     include_thoughts=include_thoughts,
+                    file_ids=file_ids,
                 )
 
                 # 构建 OpenAI 格式的 content
@@ -309,6 +312,7 @@ class OpenAICompatClient:
                     auto_save_images=True,
                     model_id=model_id,
                     include_thoughts=include_thoughts,
+                    file_ids=file_ids,
                 )
 
                 first = True
