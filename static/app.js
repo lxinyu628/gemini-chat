@@ -765,7 +765,7 @@ function renderFilePreview() {
 // 消息发送
 async function sendMessage() {
     const message = elements.messageInput.value.trim();
-    if (!message) return;
+    if (!message && state.uploadedFiles.length === 0) return;
 
     // 确保有会话
     if (!state.currentConversationId) {
@@ -774,8 +774,45 @@ async function sendMessage() {
 
     elements.welcomeScreen.style.display = 'none';
 
+    // 如果有文件，先上传
+    let uploadedFileNames = [];
+    if (state.uploadedFiles.length > 0) {
+        try {
+            for (const file of state.uploadedFiles) {
+                const formData = new FormData();
+                formData.append('file', file);
+                formData.append('session_id', state.currentConversationId);
+
+                const uploadResp = await fetch('/api/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (uploadResp.ok) {
+                    const result = await uploadResp.json();
+                    uploadedFileNames.push(file.name);
+                    console.log('文件上传成功:', result);
+                } else {
+                    console.error('文件上传失败:', await uploadResp.text());
+                }
+            }
+        } catch (err) {
+            console.error('文件上传错误:', err);
+        }
+
+        // 清空已上传的文件
+        state.uploadedFiles = [];
+        renderFilePreview();
+    }
+
+    // 构建消息内容（如果有文件，可以在消息中添加提示）
+    let finalMessage = message;
+    if (uploadedFileNames.length > 0 && !message) {
+        finalMessage = `请分析上传的文件: ${uploadedFileNames.join(', ')}`;
+    }
+
     // 显示用户消息
-    appendMessage('user', message);
+    appendMessage('user', finalMessage);
 
     // 清空输入
     elements.messageInput.value = '';
@@ -792,7 +829,7 @@ async function sendMessage() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 model: state.currentModel,
-                messages: [{ role: 'user', content: message }],
+                messages: [{ role: 'user', content: finalMessage }],
                 stream: false,
                 session_id: state.currentConversationId,
                 include_image_data: true

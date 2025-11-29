@@ -5,6 +5,7 @@
 
 Anthropic API 文档: https://docs.anthropic.com/en/api/messages
 """
+import base64
 import time
 import uuid
 from typing import Dict, Generator, List, Optional, Any, Union
@@ -33,6 +34,44 @@ def _extract_system_text(system: Optional[Union[str, List[Dict]]]) -> Optional[s
         return "\n".join(texts) if texts else None
 
     return str(system)
+
+
+def _extract_files_from_messages(messages: List[Dict]) -> List[Dict]:
+    """从消息中提取文件内容。
+
+    支持的格式：
+    - Anthropic document block: {"type": "document", "source": {"type": "base64", "data": "...", "media_type": "..."}}
+    - Text file block: {"type": "text", "text": "文件内容", "cache_control": {"type": "ephemeral"}}
+
+    Returns:
+        文件列表，每个元素为 {"name": str, "content": bytes, "mime_type": str}
+    """
+    files = []
+    for msg in messages:
+        content = msg.get("content", "")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict):
+                    block_type = block.get("type", "")
+                    # 处理文档类型
+                    if block_type == "document":
+                        source = block.get("source", {})
+                        if source.get("type") == "base64":
+                            data = source.get("data", "")
+                            media_type = source.get("media_type", "application/octet-stream")
+                            # 生成文件名
+                            file_name = block.get("name", f"file_{uuid.uuid4().hex[:8]}")
+                            if not file_name.endswith(media_type.split("/")[-1]):
+                                ext = media_type.split("/")[-1]
+                                if ext == "plain":
+                                    ext = "txt"
+                                file_name = f"{file_name}.{ext}"
+                            files.append({
+                                "name": file_name,
+                                "content": base64.b64decode(data),
+                                "mime_type": media_type,
+                            })
+    return files
 
 
 def _flatten_anthropic_messages(
@@ -157,9 +196,10 @@ class AnthropicCompatClient:
     """
 
     class _Messages:
-        def __init__(self, biz_client: BizGeminiClient, default_model: str = "gemini-2.5-pro"):
+        def __init__(self, biz_client: BizGeminiClient, default_model: str = "gemini-2.5-pro", session_name: Optional[str] = None):
             self._biz = biz_client
             self._default_model = default_model
+            self._session_name = session_name
 
         def create(
             self,
@@ -197,6 +237,15 @@ class AnthropicCompatClient:
                 raise ValueError("messages 不能为空")
 
             model_name = model or self._default_model
+
+            # 提取并上传文件
+            files = _extract_files_from_messages(messages)
+            if files:
+                try:
+                    self._biz.add_context_files(files, self._session_name)
+                except Exception as e:
+                    print(f"[WARN] 文件上传失败: {e}")
+
             prompt = _flatten_anthropic_messages(messages, system)
             msg_id = f"msg_{uuid.uuid4().hex[:24]}"
 
@@ -216,9 +265,10 @@ class AnthropicCompatClient:
             # 映射模型名称
             model_id = self._map_model_id(model_name)
 
-            # 调用 Gemini API
+            # 调用 Gemini API，使用指定的 session_name
             response = self._biz.chat_full(
                 prompt,
+                session_name=self._session_name,
                 auto_save_images=True,
                 model_id=model_id,
                 include_thoughts=True,  # 获取思考链
@@ -251,9 +301,10 @@ class AnthropicCompatClient:
             """流式创建消息，返回 SSE 事件生成器。"""
             model_id = self._map_model_id(model_name)
 
-            # 获取完整响应
+            # 获取完整响应，使用指定的 session_name
             response = self._biz.chat_full(
                 prompt,
+                session_name=self._session_name,
                 auto_save_images=True,
                 model_id=model_id,
                 include_thoughts=True,
@@ -437,5 +488,12 @@ class AnthropicCompatClient:
                 return 0
             return max(1, len(text) // 4)
 
-    def __init__(self, biz_client: BizGeminiClient, default_model: str = "gemini-2.5-pro"):
-        self.messages = self._Messages(biz_client, default_model)
+    def __init__(self, biz_client: BizGeminiClient, default_model: str = "gemini-2.5-pro", session_name: Optional[str] = None):
+        self.messages = self._Messages(biz_client, default_model, session_name)
+        self._biz = biz_client
+        self._session_name = session_name
+
+    @property
+    def session_name(self) -> str:
+        """获取当前使用的 session name"""
+        return self._session_name or self._biz.session_name

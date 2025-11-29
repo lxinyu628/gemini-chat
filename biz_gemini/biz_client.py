@@ -19,6 +19,7 @@ LIST_FILE_METADATA_URL = f"{BASE_URL}/widgetListSessionFileMetadata"
 DELETE_SESSION_URL = f"{BASE_URL}/widgetDeleteSession"
 LIST_SESSIONS_URL = f"{BASE_URL}/widgetListSessions"
 GET_SESSION_URL = f"{BASE_URL}/widgetGetSession"
+ADD_CONTEXT_FILE_URL = f"{BASE_URL}/widgetAddContextFile"
 
 # 代理场景下需要 verify=False，这里屏蔽 TLS 校验的告警噪音。
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -434,6 +435,95 @@ class BizGeminiClient:
             return resp.json()
 
         raise RuntimeError("多次尝试获取会话详情失败（可能是 cookie 失效，需要重新登录）。")
+
+    def add_context_file(
+        self,
+        file_name: str,
+        file_content: bytes,
+        mime_type: str = "text/plain",
+        session_name: Optional[str] = None,
+    ) -> dict:
+        """添加上下文文件到会话
+
+        Args:
+            file_name: 文件名
+            file_content: 文件内容（bytes）
+            mime_type: MIME 类型，默认 text/plain
+            session_name: 会话名称，如果不提供则使用当前会话
+
+        Returns:
+            包含 fileId 和 tokenCount 的字典
+        """
+        session = session_name or self.session_name
+
+        # Base64 编码文件内容
+        file_content_b64 = base64.b64encode(file_content).decode("utf-8")
+
+        body = {
+            "configId": self.group_id,
+            "additionalParams": {"token": "-"},
+            "addContextFileRequest": {
+                "name": session,
+                "fileName": file_name,
+                "mimeType": mime_type,
+                "fileContents": file_content_b64,
+            },
+        }
+
+        for attempt in range(2):
+            jwt = self.jwt_manager.get_jwt()
+            resp = requests.post(
+                ADD_CONTEXT_FILE_URL,
+                headers=build_headers(jwt),
+                json=body,
+                proxies=self._proxies,
+                verify=False,
+                timeout=60,
+            )
+
+            if resp.status_code == 401 and attempt == 0:
+                self.jwt_manager.refresh()
+                continue
+
+            if resp.status_code != 200:
+                raise RuntimeError(
+                    f"添加上下文文件失败: {resp.status_code} {resp.text[:200]}"
+                )
+
+            data = resp.json()
+            add_response = data.get("addContextFileResponse", {})
+            return {
+                "session": add_response.get("session"),
+                "file_id": add_response.get("fileId"),
+                "token_count": add_response.get("tokenCount"),
+            }
+
+        raise RuntimeError("多次尝试添加上下文文件失败（可能是 cookie 失效，需要重新登录）。")
+
+    def add_context_files(
+        self,
+        files: List[dict],
+        session_name: Optional[str] = None,
+    ) -> List[dict]:
+        """批量添加上下文文件到会话
+
+        Args:
+            files: 文件列表，每个元素为 {"name": str, "content": bytes, "mime_type": str}
+            session_name: 会话名称
+
+        Returns:
+            文件 ID 列表
+        """
+        results = []
+        for f in files:
+            result = self.add_context_file(
+                file_name=f["name"],
+                file_content=f["content"],
+                mime_type=f.get("mime_type", "text/plain"),
+                session_name=session_name,
+            )
+            results.append(result)
+        return results
 
     def _do_stream_assist(
         self,

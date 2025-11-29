@@ -5,7 +5,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional, Union
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -123,6 +123,11 @@ class AnthropicRequest(BaseModel):
     metadata: Optional[dict] = None
 
 
+# Anthropic 接口的会话管理
+# 使用单独的字典存储，key 可以是 session_id 或默认的 "default"
+anthropic_sessions: dict[str, dict] = {}
+
+
 class SessionInfo(BaseModel):
     session_id: str
     title: str
@@ -148,6 +153,32 @@ def get_or_create_client(session_id: str) -> tuple[OpenAICompatClient, dict]:
             "created_at": time.time(),
         }
     return sessions[session_id]["client"], sessions[session_id]
+
+
+def get_or_create_anthropic_client(session_id: str = "default") -> tuple[AnthropicCompatClient, dict]:
+    """获取或创建指定会话的 Anthropic 兼容客户端
+
+    Args:
+        session_id: 会话 ID，默认为 "default"（单会话模式）
+
+    Returns:
+        (AnthropicCompatClient, session_data) 元组
+    """
+    if session_id not in anthropic_sessions:
+        config = load_config()
+        jwt_manager = JWTManager(config=config)
+        biz_client = BizGeminiClient(config, jwt_manager)
+        # 获取 session_name（这会触发会话创建）
+        session_name = biz_client.session_name
+        client = AnthropicCompatClient(biz_client, session_name=session_name)
+        anthropic_sessions[session_id] = {
+            "client": client,
+            "biz_client": biz_client,
+            "session_name": session_name,
+            "messages": [],
+            "created_at": time.time(),
+        }
+    return anthropic_sessions[session_id]["client"], anthropic_sessions[session_id]
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -834,11 +865,19 @@ async def list_models():
 # ==================== Anthropic Messages API ====================
 
 @app.post("/v1/messages")
-async def anthropic_messages(request: AnthropicRequest):
+async def anthropic_messages(
+    request: AnthropicRequest,
+    x_session_id: Optional[str] = Header(None, alias="X-Session-Id"),
+):
     """Anthropic Messages API 兼容接口
 
     支持 Claude Code (Claude CLI) 等使用 Anthropic API 格式的工具。
     请求和响应格式遵循 Anthropic Messages API 规范。
+
+    会话管理：
+    - 通过 X-Session-Id header 传递会话 ID
+    - 或通过 metadata.session_id 传递会话 ID
+    - 如果都没有，使用默认会话（保持上下文连续）
     """
     try:
         config = load_config()
@@ -856,10 +895,15 @@ async def anthropic_messages(request: AnthropicRequest):
     except Exception as e:
         raise HTTPException(status_code=401, detail=str(e))
 
-    # 创建客户端
-    jwt_manager = JWTManager(config=config)
-    biz_client = BizGeminiClient(config, jwt_manager)
-    client = AnthropicCompatClient(biz_client)
+    # 确定会话 ID（优先使用 header，其次使用 metadata，最后使用默认）
+    session_id = x_session_id
+    if not session_id and request.metadata:
+        session_id = request.metadata.get("session_id")
+    if not session_id:
+        session_id = "default"
+
+    # 使用会话管理获取或创建客户端
+    client, session_data = get_or_create_anthropic_client(session_id)
 
     # 转换消息格式
     messages = []
@@ -935,15 +979,128 @@ async def anthropic_messages(request: AnthropicRequest):
 
 
 @app.post("/api/upload")
-async def upload_file(file: UploadFile = File(...)):
-    """上传文件（预留接口）"""
-    # TODO: 实现文件上传到 Gemini
-    return {
-        "success": True,
-        "filename": file.filename,
-        "content_type": file.content_type,
-        "message": "文件上传功能开发中",
-    }
+async def upload_file(
+    file: UploadFile = File(...),
+    session_id: Optional[str] = None,
+):
+    """上传文件到当前会话
+
+    Args:
+        file: 上传的文件
+        session_id: 可选的会话 ID，如果不提供则使用默认会话
+    """
+    try:
+        config = load_config()
+        missing = [k for k in ("secure_c_ses", "csesidx", "group_id") if not config.get(k)]
+        if missing:
+            raise HTTPException(status_code=401, detail="未登录")
+
+        # 读取文件内容
+        file_content = await file.read()
+
+        # 获取客户端
+        if session_id:
+            _, session_data = get_or_create_client(session_id)
+            biz_client = session_data["biz_client"]
+            session_name = session_data["session_name"]
+        else:
+            # 使用 Anthropic 默认会话
+            _, session_data = get_or_create_anthropic_client("default")
+            biz_client = session_data["biz_client"]
+            session_name = session_data["session_name"]
+
+        # 确定 MIME 类型
+        mime_type = file.content_type or "application/octet-stream"
+
+        # 上传文件
+        result = biz_client.add_context_file(
+            file_name=file.filename,
+            file_content=file_content,
+            mime_type=mime_type,
+            session_name=session_name,
+        )
+
+        return {
+            "success": True,
+            "filename": file.filename,
+            "content_type": mime_type,
+            "file_id": result.get("file_id"),
+            "token_count": result.get("token_count"),
+            "message": "文件上传成功",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        print(f"[ERROR] File upload failed: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== Anthropic 会话管理 ====================
+
+@app.post("/v1/messages/sessions")
+async def create_anthropic_session():
+    """创建新的 Anthropic 会话
+
+    返回新会话的 ID，用于后续请求的 X-Session-Id header
+    """
+    try:
+        config = load_config()
+        missing = [k for k in ("secure_c_ses", "csesidx", "group_id") if not config.get(k)]
+        if missing:
+            raise HTTPException(status_code=401, detail="未登录")
+
+        # 生成新的会话 ID
+        new_session_id = str(uuid.uuid4())
+
+        # 创建客户端（这会触发 Gemini 会话创建）
+        client, session_data = get_or_create_anthropic_client(new_session_id)
+
+        return {
+            "session_id": new_session_id,
+            "gemini_session": session_data["session_name"],
+            "created_at": session_data["created_at"],
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/v1/messages/sessions/{session_id}")
+async def delete_anthropic_session(session_id: str):
+    """删除 Anthropic 会话"""
+    if session_id in anthropic_sessions:
+        del anthropic_sessions[session_id]
+        return {"success": True, "message": f"会话 {session_id} 已删除"}
+    return {"success": False, "message": "会话不存在"}
+
+
+@app.post("/v1/messages/sessions/reset")
+async def reset_default_anthropic_session():
+    """重置默认 Anthropic 会话
+
+    这会删除默认会话并在下次请求时创建新会话，
+    用于开始全新的对话上下文。
+    """
+    if "default" in anthropic_sessions:
+        del anthropic_sessions["default"]
+    return {"success": True, "message": "默认会话已重置"}
+
+
+@app.get("/v1/messages/sessions")
+async def list_anthropic_sessions():
+    """列出所有 Anthropic 会话"""
+    result = []
+    for sid, data in anthropic_sessions.items():
+        result.append({
+            "session_id": sid,
+            "gemini_session": data.get("session_name"),
+            "created_at": data.get("created_at"),
+            "message_count": len(data.get("messages", [])),
+        })
+    return result
 
 
 @app.get("/api/images/{filename}")
