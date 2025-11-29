@@ -3,7 +3,7 @@ import json
 import os
 import time
 import uuid
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,8 +13,9 @@ from pydantic import BaseModel
 
 from biz_gemini.auth import JWTManager, check_session_status
 from biz_gemini.biz_client import BizGeminiClient
-from biz_gemini.config import cookies_age_seconds, cookies_expired, load_config, reload_config, save_config
+from biz_gemini.config import cookies_age_seconds, cookies_expired, load_config, reload_config, save_config, get_proxy
 from biz_gemini.openai_adapter import OpenAICompatClient
+from biz_gemini.anthropic_adapter import AnthropicCompatClient
 from biz_gemini.web_login import get_login_service
 from biz_gemini.remote_browser import get_browser_service, BrowserSessionStatus
 from biz_gemini.keep_alive import get_keep_alive_service
@@ -89,6 +90,33 @@ class ChatRequest(BaseModel):
     include_image_data: bool = True
     include_thoughts: bool = False  # 是否返回思考链
     embed_images_in_content: bool = True  # 是否将图片内嵌到 content（OpenAI 兼容模式）
+
+
+# Anthropic Messages API 请求模型
+class AnthropicContentBlock(BaseModel):
+    type: str
+    text: Optional[str] = None
+    # 图片支持
+    source: Optional[dict] = None
+
+
+class AnthropicMessage(BaseModel):
+    role: str
+    content: Union[str, List[AnthropicContentBlock]]
+
+
+class AnthropicRequest(BaseModel):
+    """Anthropic Messages API 请求格式"""
+    model: str = "gemini-2.5-pro"
+    max_tokens: int = 4096
+    messages: List[AnthropicMessage]
+    system: Optional[str] = None
+    stream: bool = False
+    temperature: Optional[float] = None
+    top_p: Optional[float] = None
+    top_k: Optional[int] = None
+    stop_sequences: Optional[List[str]] = None
+    metadata: Optional[dict] = None
 
 
 class SessionInfo(BaseModel):
@@ -799,6 +827,109 @@ async def list_models():
     }
 
 
+# ==================== Anthropic Messages API ====================
+
+@app.post("/v1/messages")
+async def anthropic_messages(request: AnthropicRequest):
+    """Anthropic Messages API 兼容接口
+
+    支持 Claude Code (Claude CLI) 等使用 Anthropic API 格式的工具。
+    请求和响应格式遵循 Anthropic Messages API 规范。
+    """
+    try:
+        config = load_config()
+        missing = [k for k in ("secure_c_ses", "csesidx", "group_id") if not config.get(k)]
+        if missing:
+            raise HTTPException(status_code=401, detail=f"配置缺失: {', '.join(missing)}，请先登录")
+
+        # 检查保活服务的 session 状态
+        keep_alive = get_keep_alive_service()
+        keep_alive_status = keep_alive.get_status()
+        if keep_alive_status.get("last_check") and not keep_alive_status.get("session_valid", True):
+            raise HTTPException(status_code=401, detail="登录已过期，请重新登录")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=str(e))
+
+    # 创建客户端
+    jwt_manager = JWTManager(config=config)
+    biz_client = BizGeminiClient(config, jwt_manager)
+    client = AnthropicCompatClient(biz_client)
+
+    # 转换消息格式
+    messages = []
+    for msg in request.messages:
+        if isinstance(msg.content, str):
+            messages.append({"role": msg.role, "content": msg.content})
+        else:
+            # content blocks 格式
+            content_blocks = []
+            for block in msg.content:
+                block_dict = {"type": block.type}
+                if block.text is not None:
+                    block_dict["text"] = block.text
+                if block.source is not None:
+                    block_dict["source"] = block.source
+                content_blocks.append(block_dict)
+            messages.append({"role": msg.role, "content": content_blocks})
+
+    if request.stream:
+        async def generate():
+            try:
+                response_gen = client.messages.create(
+                    model=request.model,
+                    max_tokens=request.max_tokens,
+                    messages=messages,
+                    system=request.system,
+                    stream=True,
+                    temperature=request.temperature,
+                    top_p=request.top_p,
+                    top_k=request.top_k,
+                    stop_sequences=request.stop_sequences,
+                )
+                for event in response_gen:
+                    event_type = event.get("type", "unknown")
+                    yield f"event: {event_type}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+            except Exception as e:
+                error_event = {
+                    "type": "error",
+                    "error": {
+                        "type": "api_error",
+                        "message": str(e)
+                    }
+                }
+                yield f"event: error\ndata: {json.dumps(error_event)}\n\n"
+
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+            }
+        )
+    else:
+        try:
+            response = client.messages.create(
+                model=request.model,
+                max_tokens=request.max_tokens,
+                messages=messages,
+                system=request.system,
+                stream=False,
+                temperature=request.temperature,
+                top_p=request.top_p,
+                top_k=request.top_k,
+                stop_sequences=request.stop_sequences,
+            )
+            return response
+        except Exception as e:
+            import traceback
+            print(f"[ERROR] Anthropic messages failed: {e}")
+            traceback.print_exc()
+            raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/upload")
 async def upload_file(file: UploadFile = File(...)):
     """上传文件（预留接口）"""
@@ -1227,6 +1358,8 @@ if __name__ == "__main__":
     print("=" * 50)
     print("Gemini Chat 服务器启动")
     print("访问地址: http://localhost:8000")
-    print("API 端点: POST /v1/chat/completions")
+    print("API 端点:")
+    print("  - POST /v1/chat/completions (OpenAI 兼容)")
+    print("  - POST /v1/messages (Anthropic 兼容, Claude Code)")
     print("=" * 50)
     uvicorn.run(app, host="0.0.0.0", port=8000)
