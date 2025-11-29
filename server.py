@@ -720,7 +720,7 @@ async def update_session_title(session_id: str, title: str) -> dict:
     return {"success": True}
 
 
-@app.post("/v1/chat/completions")
+@app.post("/v1/chat/completions", response_model=None)
 async def chat_completions(request: ChatRequest) -> Union[dict, StreamingResponse]:
     """OpenAI 兼容的聊天接口"""
     try:
@@ -882,7 +882,7 @@ async def list_models() -> dict:
 
 # ==================== Anthropic Messages API ====================
 
-@app.post("/v1/messages")
+@app.post("/v1/messages", response_model=None)
 async def anthropic_messages(
     request: AnthropicRequest,
     x_session_id: Optional[str] = Header(None, alias="X-Session-Id"),
