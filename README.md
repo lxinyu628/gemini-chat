@@ -300,6 +300,9 @@ E: Package 'libasound2' has no installation candidate
 **解决方案**：手动安装依赖后再安装浏览器：
 
 ```bash
+# 安装依赖，如果还有报错，根据提示安装缺失的包
+playwright install-deps
+
 # Debian/Ubuntu 系列
 apt install -y libnss3 libnspr4 libxcomposite1 libxdamage1 \
     libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 libcairo2
