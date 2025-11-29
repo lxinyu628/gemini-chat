@@ -8,9 +8,13 @@ Anthropic API 文档: https://docs.anthropic.com/en/api/messages
 import base64
 import time
 import uuid
-from typing import Dict, Generator, List, Optional, Any, Union
+from typing import Any, Dict, Generator, List, Optional, Union
 
 from .biz_client import BizGeminiClient, ChatResponse
+from .logger import get_logger
+
+# 模块级 logger
+logger = get_logger("anthropic_adapter")
 
 
 def _extract_system_text(system: Optional[Union[str, List[Dict]]]) -> Optional[str]:
@@ -244,7 +248,7 @@ class AnthropicCompatClient:
                 try:
                     self._biz.add_context_files(files, self._session_name)
                 except Exception as e:
-                    print(f"[WARN] 文件上传失败: {e}")
+                    logger.warning(f"文件上传失败: {e}")
 
             prompt = _flatten_anthropic_messages(messages, system)
             msg_id = f"msg_{uuid.uuid4().hex[:24]}"

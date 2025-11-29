@@ -5,7 +5,7 @@ import json
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Optional
+from typing import Dict, Optional
 
 import httpx
 
@@ -17,6 +17,10 @@ from .config import (
     sanitize_group_id,
     save_config,
 )
+from .logger import get_logger
+
+# 模块级 logger
+logger = get_logger("auth")
 
 GETOXSRF_URL = "https://business.gemini.google/auth/getoxsrf"
 LIST_SESSIONS_URL = "https://auth.business.gemini.google/list-sessions"
@@ -345,7 +349,7 @@ async def login_via_browser() -> dict:
         playwright_proxy = proxy.replace("socks5h://", "socks5://", 1)
 
     async with async_playwright() as p:
-        print(f"[*] 启动浏览器 (代理: {playwright_proxy})...")
+        logger.info(f"启动浏览器 (代理: {playwright_proxy})...")
         browser = await p.chromium.launch(
             headless=False,
             channel="chrome",  # 用本机 Chrome
@@ -357,13 +361,13 @@ async def login_via_browser() -> dict:
         context = await browser.new_context(**context_kwargs)
         page = await context.new_page()
 
-        print("[*] 访问 Business Gemini...")
+        logger.info("访问 Business Gemini...")
         try:
             await page.goto("https://business.gemini.google/", timeout=60000)
             await page.wait_for_load_state("networkidle")
         except Exception as e:  # noqa: BLE001
-            print(f"[!] 访问失败: {e}")
-            print("[*] 请检查代理是否正常运行")
+            logger.error(f"访问失败: {e}")
+            logger.info("请检查代理是否正常运行")
             await browser.close()
             raise
 
@@ -388,14 +392,14 @@ async def login_via_browser() -> dict:
             return "/home/" in url
 
         if not is_main_page(current_url):
-            print("[!] 请在浏览器中完成登录，等待进入 /home/ 页面...")
+            logger.info("请在浏览器中完成登录，等待进入 /home/ 页面...")
             try:
                 await page.wait_for_url(is_main_page, timeout=300000)
-                print("[+] 登录成功！")
+                logger.info("登录成功！")
                 await page.wait_for_load_state("networkidle")
                 current_url = page.url
             except Exception as e:  # noqa: BLE001
-                print(f"[!] 等待主页面超时: {e}")
+                logger.warning(f"等待主页面超时: {e}")
                 current_url = page.url
 
         csesidx = _parse_csesidx_from_url(current_url)
@@ -413,10 +417,10 @@ async def login_via_browser() -> dict:
             elif cookie["name"] == "NID":
                 nid = cookie["value"]
 
-        print(f"[+] csesidx: {csesidx}")
-        print(f"[+] GROUP_ID: {group_id}")
-        print(f"[+] NID: {'已获取' if nid else '未获取'}")
-        print("[+] Cookies 已获取")
+        logger.info(f"csesidx: {csesidx}")
+        logger.info(f"GROUP_ID: {group_id}")
+        logger.info(f"NID: {'已获取' if nid else '未获取'}")
+        logger.info("Cookies 已获取")
 
         now_str = datetime.now().strftime(TIME_FMT)
         new_cfg = {
@@ -430,8 +434,8 @@ async def login_via_browser() -> dict:
         }
         merged = save_config(new_cfg)
 
-        print("[*] 配置已写入 business_gemini_session.json")
-        print("[*] 关闭浏览器...")
+        logger.info("配置已写入 config.json")
+        logger.info("关闭浏览器...")
         await browser.close()
 
         return merged

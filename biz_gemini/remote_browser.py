@@ -4,11 +4,15 @@ import base64
 import json
 from datetime import datetime
 from enum import Enum
-from typing import Optional, Callable, Dict, Any
+from typing import Any, Callable, Dict, Optional
 
 from playwright.async_api import async_playwright, Browser, Page, BrowserContext
 
 from .config import load_config, get_proxy
+from .logger import get_logger
+
+# 模块级 logger
+logger = get_logger("remote_browser")
 
 
 class BrowserSessionStatus(str, Enum):
@@ -46,7 +50,7 @@ class RemoteBrowserSession:
         """启动浏览器"""
         # 防止重复启动
         if self.status not in (BrowserSessionStatus.IDLE, BrowserSessionStatus.STOPPED, BrowserSessionStatus.ERROR):
-            print(f"[RemoteBrowser] 会话已在运行中，状态: {self.status}")
+            logger.debug(f"会话已在运行中，状态: {self.status}")
             return True  # 已经在运行，返回成功
 
         try:
@@ -65,7 +69,7 @@ class RemoteBrowserSession:
                     playwright_proxy = {"server": proxy_url.replace("socks5h://", "socks5://", 1)}
                 else:
                     playwright_proxy = {"server": proxy_url}
-                print(f"[RemoteBrowser] 使用代理: {playwright_proxy['server']}")
+                logger.debug(f"使用代理: {playwright_proxy['server']}")
 
             self._playwright = await async_playwright().start()
 
@@ -133,7 +137,7 @@ class RemoteBrowserSession:
             await self.stop()
             return False
 
-    async def _screenshot_loop(self):
+    async def _screenshot_loop(self) -> None:
         """定期截图并推送"""
         while self.status == BrowserSessionStatus.RUNNING:
             try:
@@ -150,16 +154,16 @@ class RemoteBrowserSession:
                 await asyncio.sleep(0.3)  # 约 3 FPS
 
             except Exception as e:
-                print(f"截图错误: {e}")
+                logger.warning(f"截图错误: {e}")
                 await asyncio.sleep(1)
 
-    async def _on_navigation(self, frame):
+    async def _on_navigation(self, frame) -> None:
         """页面导航事件处理"""
         if frame != self._page.main_frame:
             return
 
         url = self._page.url
-        print(f"[RemoteBrowser] 导航到: {url}")
+        logger.debug(f"导航到: {url}")
 
         # 检测是否已登录到主页
         if self._is_main_page(url):
@@ -248,51 +252,51 @@ class RemoteBrowserSession:
                 await self._notify_status()
 
         except Exception as e:
-            print(f"处理登录成功时出错: {e}")
+            logger.error(f"处理登录成功时出错: {e}")
             self.message = f"获取凭证失败: {str(e)}"
             await self._notify_status()
 
-    async def click(self, x: int, y: int):
+    async def click(self, x: int, y: int) -> None:
         """鼠标点击"""
         if self._page and self.status == BrowserSessionStatus.RUNNING:
             await self._page.mouse.click(x, y)
 
-    async def type_text(self, text: str):
+    async def type_text(self, text: str) -> None:
         """输入文本"""
         if self._page and self.status == BrowserSessionStatus.RUNNING:
             await self._page.keyboard.type(text)
 
-    async def press_key(self, key: str):
+    async def press_key(self, key: str) -> None:
         """按键"""
         if self._page and self.status == BrowserSessionStatus.RUNNING:
             await self._page.keyboard.press(key)
 
-    async def scroll(self, delta_x: int, delta_y: int):
+    async def scroll(self, delta_x: int, delta_y: int) -> None:
         """滚动"""
         if self._page and self.status == BrowserSessionStatus.RUNNING:
             await self._page.mouse.wheel(delta_x, delta_y)
 
-    async def navigate(self, url: str):
+    async def navigate(self, url: str) -> None:
         """导航到指定 URL"""
         if self._page and self.status == BrowserSessionStatus.RUNNING:
             await self._page.goto(url, timeout=30000)
 
-    def subscribe(self, callback: Callable):
+    def subscribe(self, callback: Callable) -> None:
         """订阅消息"""
         self._subscribers.append(callback)
 
-    def unsubscribe(self, callback: Callable):
+    def unsubscribe(self, callback: Callable) -> None:
         """取消订阅"""
         if callback in self._subscribers:
             self._subscribers.remove(callback)
 
-    async def _broadcast(self, message: dict):
+    async def _broadcast(self, message: dict) -> None:
         """广播消息给所有订阅者"""
         for callback in self._subscribers:
             try:
                 await callback(message)
             except Exception as e:
-                print(f"广播消息失败: {e}")
+                logger.warning(f"广播消息失败: {e}")
 
     async def _notify_status(self):
         """通知状态变更"""
@@ -302,7 +306,7 @@ class RemoteBrowserSession:
             "message": self.message,
         })
 
-    async def stop(self):
+    async def stop(self) -> None:
         """停止浏览器"""
         self.status = BrowserSessionStatus.STOPPED
 

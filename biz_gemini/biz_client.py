@@ -4,13 +4,17 @@ import os
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 import urllib3
 import requests
 
 from .auth import JWTManager
 from .config import get_proxy
+from .logger import get_logger
+
+# 模块级 logger
+logger = get_logger("biz_client")
 
 BASE_URL = "https://biz-discoveryengine.googleapis.com/v1alpha/locations/global"
 CREATE_SESSION_URL = f"{BASE_URL}/widgetCreateSession"
@@ -435,7 +439,7 @@ class BizGeminiClient:
             data = resp.json()
             session_data = data.get("session", {})
             full_session_name = session_data.get("name", "")
-            print(f"[DEBUG] get_session response session.name: {full_session_name}")
+            logger.debug(f"get_session response session.name: {full_session_name}")
             return data
 
         raise RuntimeError("多次尝试获取会话详情失败（可能是 cookie 失效，需要重新登录）。")
@@ -463,7 +467,7 @@ class BizGeminiClient:
         # Base64 编码文件内容
         file_content_b64 = base64.b64encode(file_content).decode("utf-8")
 
-        print(f"[DEBUG] add_context_file: session={session}, file_name={file_name}, mime_type={mime_type}, content_size={len(file_content)}")
+        logger.debug(f"add_context_file: session={session}, file_name={file_name}, mime_type={mime_type}, content_size={len(file_content)}")
 
         body = {
             "configId": self.group_id,
@@ -487,20 +491,20 @@ class BizGeminiClient:
                 timeout=60,
             )
 
-            print(f"[DEBUG] add_context_file response: status={resp.status_code}")
+            logger.debug(f"add_context_file response: status={resp.status_code}")
 
             if resp.status_code == 401 and attempt == 0:
                 self.jwt_manager.refresh()
                 continue
 
             if resp.status_code != 200:
-                print(f"[DEBUG] add_context_file error: {resp.text[:500]}")
+                logger.debug(f"add_context_file error: {resp.text[:500]}")
                 raise RuntimeError(
                     f"添加上下文文件失败: {resp.status_code} {resp.text[:200]}"
                 )
 
             data = resp.json()
-            print(f"[DEBUG] add_context_file success: {json.dumps(data, ensure_ascii=False)}")
+            logger.debug(f"add_context_file success: {json.dumps(data, ensure_ascii=False)}")
             add_response = data.get("addContextFileResponse", {})
             return {
                 "session": add_response.get("session"),
@@ -658,11 +662,11 @@ class BizGeminiClient:
             )
 
         if resp.status_code != 200:
-            print(f"[DEBUG] _get_session_file_metadata error: {resp.status_code} {resp.text[:200]}")
+            logger.debug(f"_get_session_file_metadata error: {resp.status_code} {resp.text[:200]}")
             return {}
 
         data = resp.json()
-        print(f"[DEBUG] _get_session_file_metadata response: {json.dumps(data, ensure_ascii=False)[:500]}")
+        logger.debug(f"_get_session_file_metadata response: {json.dumps(data, ensure_ascii=False)[:500]}")
 
         result = {}
         file_metadata_list = data.get("listSessionFileMetadataResponse", {}).get("fileMetadata", [])
@@ -698,7 +702,7 @@ class BizGeminiClient:
         格式如: projects/xxx/locations/global/collections/default_collection/engines/agentspace-engine/sessions/xxx
         """
         url = f"https://biz-discoveryengine.googleapis.com/v1alpha/{session_name}:downloadFile?fileId={file_id}&alt=media"
-        print(f"[DEBUG] 构造下载 URL: {url}")
+        logger.debug(f"构造下载 URL: {url}")
         return url
 
     def _download_file_with_jwt(self, download_uri: str, session_name: Optional[str] = None, file_id: Optional[str] = None) -> bytes:
@@ -828,9 +832,8 @@ class BizGeminiClient:
 
         # 调试模式：打印完整响应
         if debug:
-            print("\n=== DEBUG: 完整 API 响应 ===")
-            print(json.dumps(data_list, indent=2, ensure_ascii=False))
-            print("=== END DEBUG ===\n")
+            logger.debug("完整 API 响应:")
+            logger.debug(json.dumps(data_list, indent=2, ensure_ascii=False))
 
         texts: list[str] = []
         file_ids: list[dict] = []  # 收集需要下载的文件 {fileId, mimeType}
@@ -904,9 +907,8 @@ class BizGeminiClient:
             try:
                 file_metadata = self._get_session_file_metadata(current_session)
                 if debug and file_metadata:
-                    print("\n=== DEBUG: 文件元数据 ===")
-                    print(json.dumps(file_metadata, indent=2, ensure_ascii=False))
-                    print("=== END DEBUG ===\n")
+                    logger.debug("文件元数据:")
+                    logger.debug(json.dumps(file_metadata, indent=2, ensure_ascii=False))
 
                 for finfo in file_ids:
                     fid = finfo["fileId"]
@@ -930,10 +932,10 @@ class BizGeminiClient:
                                 f.write(image_data)
                             img.local_path = filepath
                             if debug:
-                                print(f"[DEBUG] 图片已保存: {filepath}")
+                                logger.debug(f"图片已保存: {filepath}")
                         except Exception as e:
                             if debug:
-                                print(f"[DEBUG] 下载图片失败: {e}")
+                                logger.debug(f"下载图片失败: {e}")
                         result.images.append(img)
                     else:
                         # 没有元数据时，使用基本信息创建
@@ -944,7 +946,7 @@ class BizGeminiClient:
                         result.images.append(img)
             except Exception as e:
                 if debug:
-                    print(f"[DEBUG] 获取文件元数据失败: {e}")
+                    logger.debug(f"获取文件元数据失败: {e}")
 
         result.text = "".join(texts)
         return result

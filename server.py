@@ -19,8 +19,12 @@ from biz_gemini.anthropic_adapter import AnthropicCompatClient
 from biz_gemini.web_login import get_login_service
 from biz_gemini.remote_browser import get_browser_service, BrowserSessionStatus
 from biz_gemini.keep_alive import get_keep_alive_service
+from biz_gemini.logger import get_logger
 from config_watcher import start_config_watcher, stop_config_watcher
 from version import VERSION, get_version_info, GITHUB_REPO
+
+# 模块级 logger
+logger = get_logger("server")
 
 app = FastAPI(title="Gemini Chat API", version=VERSION)
 
@@ -45,37 +49,37 @@ os.makedirs(IMAGES_DIR, exist_ok=True)
 sessions: dict[str, dict] = {}
 
 # 配置热重载回调
-def on_config_changed(new_config: dict):
+def on_config_changed(new_config: dict) -> None:
     """配置变更时的回调函数"""
-    print("[*] 配置已更新，部分配置将在下次请求时生效")
+    logger.info("配置已更新，部分配置将在下次请求时生效")
     # 可以在这里添加其他配置变更处理逻辑
     # 例如：更新代理配置、刷新客户端等
 
 # 应用生命周期事件
 @app.on_event("startup")
-async def startup_event():
+async def startup_event() -> None:
     """应用启动时执行"""
-    print("[*] 启动配置文件监控...")
+    logger.info("启动配置文件监控...")
     start_config_watcher(callback=on_config_changed)
-    print("[+] 配置监控已启动")
+    logger.info("配置监控已启动")
 
     # 启动 Session 保活服务
-    print("[*] 启动 Session 保活服务...")
+    logger.info("启动 Session 保活服务...")
     keep_alive = get_keep_alive_service(interval_minutes=10)
     await keep_alive.start()
-    print("[+] Session 保活服务已启动（每 10 分钟检查一次）")
+    logger.info("Session 保活服务已启动（每 10 分钟检查一次）")
 
 @app.on_event("shutdown")
-async def shutdown_event():
+async def shutdown_event() -> None:
     """应用关闭时执行"""
-    print("[*] 停止 Session 保活服务...")
+    logger.info("停止 Session 保活服务...")
     keep_alive = get_keep_alive_service()
     await keep_alive.stop()
-    print("[+] Session 保活服务已停止")
+    logger.info("Session 保活服务已停止")
 
-    print("[*] 停止配置文件监控...")
+    logger.info("停止配置文件监控...")
     stop_config_watcher()
-    print("[+] 配置监控已停止")
+    logger.info("配置监控已停止")
 
 
 class Message(BaseModel):
@@ -182,17 +186,17 @@ def get_or_create_anthropic_client(session_id: str = "default") -> tuple[Anthrop
 
 
 @app.get("/", response_class=HTMLResponse)
-async def index():
+async def index() -> HTMLResponse:
     """返回前端页面"""
     index_path = os.path.join(STATIC_DIR, "index.html")
     if os.path.exists(index_path):
         with open(index_path, "r", encoding="utf-8") as f:
-            return f.read()
+            return HTMLResponse(f.read())
     return HTMLResponse("<h1>请先创建 static/index.html</h1>")
 
 
 @app.get("/api/status")
-async def get_status():
+async def get_status() -> dict:
     """获取登录状态（通过 list-sessions 检查真实的 session 状态）"""
     try:
         config = load_config()
@@ -267,10 +271,9 @@ async def get_status():
 
 
 @app.get("/api/debug/session-status")
-async def debug_session_status():
+async def debug_session_status() -> dict:
     """调试端点：查看 list-sessions 原始返回"""
     import httpx
-    from biz_gemini.config import get_proxy
 
     config = load_config()
     secure_c_ses = config.get("secure_c_ses")
@@ -315,7 +318,6 @@ async def debug_session_status():
         if text.startswith(")]}'"):
             text = text[4:].strip()
 
-        import json
         data = json.loads(text)
 
         # 检查 session 状态
@@ -346,11 +348,11 @@ async def debug_session_status():
 
 
 @app.post("/api/config/reload")
-async def reload_config_endpoint():
+async def reload_config_endpoint() -> dict:
     """手动重载配置"""
     try:
         new_config = reload_config()
-        print("[+] 配置手动重载成功")
+        logger.info("配置手动重载成功")
         return {
             "success": True,
             "message": "配置重载成功",
@@ -360,7 +362,7 @@ async def reload_config_endpoint():
             },
         }
     except Exception as e:
-        print(f"[!] 配置重载失败: {e}")
+        logger.warning(f"配置重载失败: {e}")
         return {
             "success": False,
             "error": str(e),
@@ -368,7 +370,7 @@ async def reload_config_endpoint():
 
 
 @app.post("/api/login/start")
-async def start_login(headless: bool = False):
+async def start_login(headless: bool = False) -> dict:
     """启动浏览器登录流程"""
     try:
         login_service = get_login_service()
@@ -382,7 +384,7 @@ async def start_login(headless: bool = False):
 
 
 @app.get("/api/login/status")
-async def get_login_status(task_id: Optional[str] = None):
+async def get_login_status(task_id: Optional[str] = None) -> dict:
     """获取登录状态"""
     login_service = get_login_service()
     
@@ -405,11 +407,11 @@ async def get_login_status(task_id: Optional[str] = None):
 
 
 @app.post("/api/login/cancel")
-async def cancel_login(task_id: str):
+async def cancel_login(task_id: str) -> dict:
     """取消登录流程"""
     login_service = get_login_service()
     success = await login_service.cancel_task(task_id)
-    
+
     if success:
         return {
             "success": True,
@@ -424,7 +426,7 @@ async def cancel_login(task_id: str):
 
 
 @app.get("/api/sessions")
-async def list_sessions():
+async def list_sessions() -> list:
     """列出所有会话 - 对接 Google 官方接口"""
     try:
         config = load_config()
@@ -496,7 +498,7 @@ async def list_sessions():
 
     except Exception as e:
         # 出错时返回本地缓存
-        print(f"获取会话列表失败，返回本地缓存: {e}")
+        logger.warning(f"获取会话列表失败，返回本地缓存: {e}")
         result = []
         for sid, data in sessions.items():
             result.append({
@@ -510,14 +512,14 @@ async def list_sessions():
 
 
 @app.post("/api/sessions")
-async def create_session():
+async def create_session() -> dict:
     """创建新会话"""
     session_id = str(uuid.uuid4())
     return {"session_id": session_id}
 
 
 @app.delete("/api/sessions/{session_id:path}")
-async def delete_session(session_id: str):
+async def delete_session(session_id: str) -> dict:
     """删除会话 - 支持 session_id 或完整的 session_name"""
     try:
         config = load_config()
@@ -539,7 +541,7 @@ async def delete_session(session_id: str):
             try:
                 biz_client.delete_session(session_name)
             except Exception as e:
-                print(f"删除 Google 会话失败: {e}")
+                logger.warning(f"删除 Google 会话失败: {e}")
 
         # 同时删除本地缓存
         # 从本地 sessions 中查找匹配的会话
@@ -555,12 +557,12 @@ async def delete_session(session_id: str):
 
         return {"success": True}
     except Exception as e:
-        print(f"删除会话时出错: {e}")
+        logger.error(f"删除会话时出错: {e}")
         return {"success": False, "error": str(e)}
 
 
 @app.get("/api/sessions/{session_id}/messages")
-async def get_session_messages(session_id: str, session_name: str = None):
+async def get_session_messages(session_id: str, session_name: Optional[str] = None) -> dict:
     """获取会话消息历史 - 优先本地存储，其次调用 Google API"""
     # 1. 优先从本地存储获取
     if session_id in sessions:
@@ -628,7 +630,7 @@ async def get_session_messages(session_id: str, session_name: str = None):
                     # 检查是否有图片文件
                     file_info = content.get("file")
                     if file_info:
-                        print(f"[DEBUG] 历史消息中的图片信息: {file_info}")
+                        logger.debug(f"历史消息中的图片信息: {file_info}")
                         if file_info.get("fileId"):
                             file_id = file_info["fileId"]
                             turn_file_ids.append({
@@ -701,17 +703,17 @@ async def get_session_messages(session_id: str, session_name: str = None):
 
                         msg["images"] = enriched_images
             except Exception as e:
-                print(f"获取图片元数据失败: {e}")
+                logger.warning(f"获取图片元数据失败: {e}")
 
         return {"messages": messages}
 
     except Exception as e:
-        print(f"从 Google API 获取会话消息失败: {e}")
+        logger.warning(f"从 Google API 获取会话消息失败: {e}")
         return {"messages": []}
 
 
 @app.put("/api/sessions/{session_id}/title")
-async def update_session_title(session_id: str, title: str):
+async def update_session_title(session_id: str, title: str) -> dict:
     """更新会话标题"""
     if session_id in sessions:
         sessions[session_id]["title"] = title
@@ -719,7 +721,7 @@ async def update_session_title(session_id: str, title: str):
 
 
 @app.post("/v1/chat/completions")
-async def chat_completions(request: ChatRequest):
+async def chat_completions(request: ChatRequest) -> Union[dict, StreamingResponse]:
     """OpenAI 兼容的聊天接口"""
     try:
         config = load_config()
@@ -742,7 +744,7 @@ async def chat_completions(request: ChatRequest):
 
     # 获取待发送的文件 ID
     pending_file_ids = session_data.get("pending_file_ids", [])
-    print(f"[DEBUG] 聊天请求: session_id={session_id}, session_name={session_data.get('session_name')}, pending_file_ids={pending_file_ids}")
+    logger.debug(f"聊天请求: session_id={session_id}, session_name={session_data.get('session_name')}, pending_file_ids={pending_file_ids}")
 
     # 保存用户消息
     user_message = request.messages[-1] if request.messages else None
@@ -835,13 +837,13 @@ async def chat_completions(request: ChatRequest):
             )
 
             # 调试日志：打印响应内容
-            print(f"[DEBUG] Chat response keys: {response.keys()}")
+            logger.debug(f"Chat response keys: {response.keys()}")
             content = response.get("choices", [{}])[0].get("message", {}).get("content", "")
-            print(f"[DEBUG] Content type: {type(content)}, empty: {not content}")
+            logger.debug(f"Content type: {type(content)}, empty: {not content}")
             if "images" in response:
-                print(f"[DEBUG] Images count: {len(response.get('images', []))}")
+                logger.debug(f"Images count: {len(response.get('images', []))}")
             if "thoughts" in response:
-                print(f"[DEBUG] Thoughts count: {len(response.get('thoughts', []))}")
+                logger.debug(f"Thoughts count: {len(response.get('thoughts', []))}")
 
             # 保存助手回复
             msg_data = {
@@ -858,13 +860,13 @@ async def chat_completions(request: ChatRequest):
             return response
         except Exception as e:
             import traceback
-            print(f"[ERROR] Chat completion failed: {e}")
+            logger.error(f"Chat completion failed: {e}")
             traceback.print_exc()
             raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/v1/models")
-async def list_models():
+async def list_models() -> dict:
     """列出可用模型"""
     return {
         "object": "list",
@@ -884,7 +886,7 @@ async def list_models():
 async def anthropic_messages(
     request: AnthropicRequest,
     x_session_id: Optional[str] = Header(None, alias="X-Session-Id"),
-):
+) -> Union[dict, StreamingResponse]:
     """Anthropic Messages API 兼容接口
 
     支持 Claude Code (Claude CLI) 等使用 Anthropic API 格式的工具。
@@ -989,7 +991,7 @@ async def anthropic_messages(
             return response
         except Exception as e:
             import traceback
-            print(f"[ERROR] Anthropic messages failed: {e}")
+            logger.error(f"Anthropic messages failed: {e}")
             traceback.print_exc()
             raise HTTPException(status_code=500, detail=str(e))
 
@@ -998,7 +1000,7 @@ async def anthropic_messages(
 async def upload_file(
     file: UploadFile = File(...),
     session_id: Optional[str] = Form(None),
-):
+) -> dict:
     """上传文件到当前会话
 
     Args:
@@ -1014,33 +1016,33 @@ async def upload_file(
         # 读取文件内容
         file_content = await file.read()
 
-        print(f"[DEBUG] 文件上传请求: filename={file.filename}, size={len(file_content)}, session_id={session_id}")
+        logger.debug(f"文件上传请求: filename={file.filename}, size={len(file_content)}, session_id={session_id}")
 
         # 获取客户端
         if session_id:
             _, session_data = get_or_create_client(session_id)
             biz_client = session_data["biz_client"]
             session_name = session_data["session_name"]
-            print(f"[DEBUG] 使用 OpenAI 会话: session_id={session_id}, session_name={session_name}")
+            logger.debug(f"使用 OpenAI 会话: session_id={session_id}, session_name={session_name}")
         else:
             # 使用 Anthropic 默认会话
             _, session_data = get_or_create_anthropic_client("default")
             biz_client = session_data["biz_client"]
             session_name = session_data["session_name"]
-            print(f"[DEBUG] 使用 Anthropic 默认会话: session_name={session_name}")
+            logger.debug(f"使用 Anthropic 默认会话: session_name={session_name}")
 
         # 确定 MIME 类型
         mime_type = file.content_type or "application/octet-stream"
 
         # 上传文件
-        print(f"[DEBUG] 正在上传文件到 session: {session_name}")
+        logger.debug(f"正在上传文件到 session: {session_name}")
         result = biz_client.add_context_file(
             file_name=file.filename,
             file_content=file_content,
             mime_type=mime_type,
             session_name=session_name,
         )
-        print(f"[DEBUG] 文件上传结果: {result}")
+        logger.debug(f"文件上传结果: {result}")
 
         # 保存文件 ID 到会话数据，以便在发送消息时使用
         file_id = result.get("file_id")
@@ -1048,7 +1050,7 @@ async def upload_file(
             if "pending_file_ids" not in session_data:
                 session_data["pending_file_ids"] = []
             session_data["pending_file_ids"].append(file_id)
-            print(f"[DEBUG] 已添加 file_id 到待发送列表: {file_id}, 当前列表: {session_data['pending_file_ids']}")
+            logger.debug(f"已添加 file_id 到待发送列表: {file_id}, 当前列表: {session_data['pending_file_ids']}")
 
         return {
             "success": True,
@@ -1063,7 +1065,7 @@ async def upload_file(
         raise
     except Exception as e:
         import traceback
-        print(f"[ERROR] File upload failed: {e}")
+        logger.error(f"File upload failed: {e}")
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1071,7 +1073,7 @@ async def upload_file(
 # ==================== Anthropic 会话管理 ====================
 
 @app.post("/v1/messages/sessions")
-async def create_anthropic_session():
+async def create_anthropic_session() -> dict:
     """创建新的 Anthropic 会话
 
     返回新会话的 ID，用于后续请求的 X-Session-Id header
@@ -1100,7 +1102,7 @@ async def create_anthropic_session():
 
 
 @app.delete("/v1/messages/sessions/{session_id}")
-async def delete_anthropic_session(session_id: str):
+async def delete_anthropic_session(session_id: str) -> dict:
     """删除 Anthropic 会话"""
     if session_id in anthropic_sessions:
         del anthropic_sessions[session_id]
@@ -1109,7 +1111,7 @@ async def delete_anthropic_session(session_id: str):
 
 
 @app.post("/v1/messages/sessions/reset")
-async def reset_default_anthropic_session():
+async def reset_default_anthropic_session() -> dict:
     """重置默认 Anthropic 会话
 
     这会删除默认会话并在下次请求时创建新会话，
@@ -1121,7 +1123,7 @@ async def reset_default_anthropic_session():
 
 
 @app.get("/v1/messages/sessions")
-async def list_anthropic_sessions():
+async def list_anthropic_sessions() -> list:
     """列出所有 Anthropic 会话"""
     result = []
     for sid, data in anthropic_sessions.items():
@@ -1135,7 +1137,7 @@ async def list_anthropic_sessions():
 
 
 @app.get("/api/sessions/{session_id}/files")
-async def list_session_files(session_id: str):
+async def list_session_files(session_id: str) -> dict:
     """列出会话中的所有文件（用于调试）
 
     Args:
@@ -1186,7 +1188,7 @@ async def list_session_files(session_id: str):
 
 
 @app.get("/api/images/{filename}")
-async def get_image(filename: str):
+async def get_image(filename: str) -> FileResponse:
     """提供本地生成图片的访问"""
     # 安全检查：防止路径遍历
     safe_filename = os.path.basename(filename)
@@ -1210,7 +1212,7 @@ async def get_image(filename: str):
 
 
 @app.get("/api/sessions/{session_id}/images/{file_id}")
-async def download_session_image(session_id: str, file_id: str, session_name: str = None):
+async def download_session_image(session_id: str, file_id: str, session_name: Optional[str] = None) -> FileResponse:
     """通过 session 和 fileId 下载图片（用于历史对话中的图片）
 
     优先返回本地缓存，如果没有则从 Google 下载并缓存
@@ -1227,14 +1229,14 @@ async def download_session_image(session_id: str, file_id: str, session_name: st
         # 确定 session_name（用于查询文件元数据）
         query_session_name = session_name or f"collections/default_collection/engines/agentspace-engine/sessions/{session_id}"
 
-        print(f"[DEBUG] 下载图片请求: session_id={session_id}, file_id={file_id}, query_session_name={query_session_name}")
+        logger.debug(f"下载图片请求: session_id={session_id}, file_id={file_id}, query_session_name={query_session_name}")
 
         # 先检查本地缓存（按 file_id 匹配文件名）
         for ext in [".png", ".jpg", ".jpeg", ".gif", ".webp"]:
             # 检查 gemini_{file_id} 格式
             alt_path = os.path.join(IMAGES_DIR, f"gemini_{file_id}{ext}")
             if os.path.exists(alt_path):
-                print(f"[DEBUG] 找到本地缓存: {alt_path}")
+                logger.debug(f"找到本地缓存: {alt_path}")
                 alt_mime = {
                     ".png": "image/png",
                     ".jpg": "image/jpeg",
@@ -1246,15 +1248,15 @@ async def download_session_image(session_id: str, file_id: str, session_name: st
 
         # 获取文件元数据 - 使用 AI_GENERATED filter 获取生成的图片
         file_metadata = biz_client._get_session_file_metadata(query_session_name, filter_str="file_origin_type = AI_GENERATED")
-        print(f"[DEBUG] 获取到的文件元数据 keys: {list(file_metadata.keys())}")
+        logger.debug(f"获取到的文件元数据 keys: {list(file_metadata.keys())}")
 
         meta = file_metadata.get(file_id, {})
-        print(f"[DEBUG] file_id={file_id} 的元数据: {meta}")
+        logger.debug(f"file_id={file_id} 的元数据: {meta}")
 
         if not meta:
             # 如果没有找到，尝试不带 filter
             file_metadata_all = biz_client._get_session_file_metadata(query_session_name, filter_str="")
-            print(f"[DEBUG] 所有文件元数据 keys: {list(file_metadata_all.keys())}")
+            logger.debug(f"所有文件元数据 keys: {list(file_metadata_all.keys())}")
             meta = file_metadata_all.get(file_id, {})
 
         file_name = meta.get("name", f"gemini_{file_id}.png")
@@ -1262,16 +1264,16 @@ async def download_session_image(session_id: str, file_id: str, session_name: st
         # 使用元数据中的完整 session 路径（包含 project_id）
         full_session = meta.get("session") or query_session_name
 
-        print(f"[DEBUG] 使用完整 session 路径: {full_session}")
+        logger.debug(f"使用完整 session 路径: {full_session}")
 
         # 检查本地是否已有缓存（使用实际文件名）
         local_path = os.path.join(IMAGES_DIR, file_name)
         if os.path.exists(local_path):
-            print(f"[DEBUG] 找到本地缓存（通过文件名）: {local_path}")
+            logger.debug(f"找到本地缓存（通过文件名）: {local_path}")
             return FileResponse(local_path, media_type=mime_type)
 
         # 本地没有缓存，从 Google 下载
-        print(f"[DEBUG] 本地没有缓存，尝试从 Google 下载: file_id={file_id}, session={full_session}")
+        logger.debug(f"本地没有缓存，尝试从 Google 下载: file_id={file_id}, session={full_session}")
         image_data = biz_client._download_file_with_jwt(
             download_uri="",
             session_name=full_session,
@@ -1289,14 +1291,14 @@ async def download_session_image(session_id: str, file_id: str, session_name: st
     except HTTPException:
         raise
     except Exception as e:
-        print(f"下载图片失败: {e}")
+        logger.error(f"下载图片失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 # ==================== 远程浏览器登录 ====================
 
 @app.websocket("/ws/browser")
-async def browser_websocket(websocket: WebSocket):
+async def browser_websocket(websocket: WebSocket) -> None:
     """远程浏览器 WebSocket 端点"""
     await websocket.accept()
 
@@ -1304,11 +1306,11 @@ async def browser_websocket(websocket: WebSocket):
     session = await browser_service.create_session()
 
     # 消息发送回调
-    async def send_message(message: dict):
+    async def send_message(message: dict) -> None:
         try:
             await websocket.send_json(message)
         except Exception as e:
-            print(f"WebSocket 发送消息失败: {e}")
+            logger.warning(f"WebSocket 发送消息失败: {e}")
 
     session.subscribe(send_message)
 
@@ -1396,7 +1398,7 @@ async def browser_websocket(websocket: WebSocket):
             except WebSocketDisconnect:
                 break
             except Exception as e:
-                print(f"处理 WebSocket 消息错误: {e}")
+                logger.warning(f"处理 WebSocket 消息错误: {e}")
 
     finally:
         session.unsubscribe(send_message)
@@ -1405,7 +1407,7 @@ async def browser_websocket(websocket: WebSocket):
 
 
 @app.post("/api/browser/start")
-async def start_browser():
+async def start_browser() -> dict:
     """启动远程浏览器（REST API 方式）"""
     browser_service = get_browser_service()
     session = await browser_service.get_active_session()
@@ -1427,7 +1429,7 @@ async def start_browser():
 
 
 @app.post("/api/browser/stop")
-async def stop_browser():
+async def stop_browser() -> dict:
     """停止远程浏览器"""
     browser_service = get_browser_service()
     session = await browser_service.get_active_session()
@@ -1440,7 +1442,7 @@ async def stop_browser():
 
 
 @app.get("/api/browser/status")
-async def browser_status():
+async def browser_status() -> dict:
     """获取远程浏览器状态"""
     browser_service = get_browser_service()
     session = await browser_service.get_active_session()
@@ -1460,7 +1462,7 @@ async def browser_status():
 
 
 @app.post("/api/session/update")
-async def update_session_config(config: dict):
+async def update_session_config(config: dict) -> dict:
     """手动更新登录配置（用于手动粘贴 Cookie）
 
     只需要提供 secure_c_ses 和 group_id，csesidx 会自动获取
@@ -1517,7 +1519,6 @@ async def update_session_config(config: dict):
                         if text.startswith(")]}'"):
                             text = text[4:].strip()
 
-                        import json
                         data = json.loads(text)
                         sessions_list = data.get("sessions", [])
 
@@ -1575,14 +1576,14 @@ async def update_session_config(config: dict):
 # ==================== Session 保活服务 ====================
 
 @app.get("/api/keep-alive/status")
-async def keep_alive_status():
+async def keep_alive_status() -> dict:
     """获取保活服务状态"""
     service = get_keep_alive_service()
     return service.get_status()
 
 
 @app.post("/api/keep-alive/refresh")
-async def keep_alive_refresh():
+async def keep_alive_refresh() -> dict:
     """手动触发一次 Session 刷新"""
     service = get_keep_alive_service()
     result = await service.refresh_now()
@@ -1590,7 +1591,7 @@ async def keep_alive_refresh():
 
 
 @app.post("/api/keep-alive/start")
-async def keep_alive_start():
+async def keep_alive_start() -> dict:
     """启动保活服务"""
     service = get_keep_alive_service()
     if service._running:
@@ -1600,7 +1601,7 @@ async def keep_alive_start():
 
 
 @app.post("/api/keep-alive/stop")
-async def keep_alive_stop():
+async def keep_alive_stop() -> dict:
     """停止保活服务"""
     service = get_keep_alive_service()
     if not service._running:
@@ -1612,13 +1613,13 @@ async def keep_alive_stop():
 # ==================== 版本管理 ====================
 
 @app.get("/api/version")
-async def get_version_endpoint():
+async def get_version_endpoint() -> dict:
     """获取当前版本信息"""
     return get_version_info()
 
 
 @app.get("/api/version/check")
-async def check_version_update():
+async def check_version_update() -> dict:
     """检查是否有新版本
 
     从 GitHub API 获取最新 release 信息并与当前版本对比。
@@ -1698,11 +1699,11 @@ if os.path.exists(STATIC_DIR):
 
 if __name__ == "__main__":
     import uvicorn
-    print("=" * 50)
-    print("Gemini Chat 服务器启动")
-    print("访问地址: http://localhost:8000")
-    print("API 端点:")
-    print("  - POST /v1/chat/completions (OpenAI 兼容)")
-    print("  - POST /v1/messages (Anthropic 兼容, Claude Code)")
-    print("=" * 50)
+    logger.info("=" * 50)
+    logger.info("Gemini Chat 服务器启动")
+    logger.info("访问地址: http://localhost:8000")
+    logger.info("API 端点:")
+    logger.info("  - POST /v1/chat/completions (OpenAI 兼容)")
+    logger.info("  - POST /v1/messages (Anthropic 兼容, Claude Code)")
+    logger.info("=" * 50)
     uvicorn.run(app, host="0.0.0.0", port=8000)

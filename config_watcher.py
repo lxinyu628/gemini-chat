@@ -118,7 +118,7 @@ def start_config_watcher(callback: Optional[Callable[[dict], None]] = None) -> C
     return _watcher
 
 
-def stop_config_watcher():
+def stop_config_watcher() -> None:
     """停止全局配置监控器"""
     global _watcher
     

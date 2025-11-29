@@ -1,16 +1,20 @@
 """统一配置管理模块，支持 config.json、环境变量、配置迁移和热重载"""
 import json
+import logging
 import os
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 
 # 配置文件路径
 PROJECT_ROOT = Path(__file__).parent.parent
 NEW_CONFIG_FILE = PROJECT_ROOT / "config.json"
 OLD_CONFIG_FILE = Path(__file__).parent / "business_gemini_session.json"
 TIME_FMT = "%Y-%m-%d %H:%M:%S"
+
+# 模块级 logger（不使用 .logger 避免循环导入）
+logger = logging.getLogger("config")
 
 # 默认配置
 DEFAULT_CONFIG = {
@@ -54,13 +58,13 @@ def migrate_old_config() -> bool:
         return False
 
     try:
-        print(f"[*] 检测到旧配置文件，正在迁移...")
+        logger.info("检测到旧配置文件，正在迁移...")
         with open(OLD_CONFIG_FILE, "r", encoding="utf-8") as f:
             old_cfg = json.load(f)
 
         # 创建新配置结构
         new_cfg = DEFAULT_CONFIG.copy()
-        
+
         # 迁移 session 配置
         session_keys = ["secure_c_ses", "host_c_oses", "nid", "csesidx", "group_id", "project_id", "cookies_saved_at", "saved_at"]
         for key in session_keys:
@@ -83,11 +87,11 @@ def migrate_old_config() -> bool:
         # 备份旧配置
         backup_file = OLD_CONFIG_FILE.with_suffix(".json.backup")
         shutil.copy2(OLD_CONFIG_FILE, backup_file)
-        print(f"[+] 配置迁移完成，旧配置已备份到: {backup_file}")
-        
+        logger.info(f"配置迁移完成，旧配置已备份到: {backup_file}")
+
         return True
     except Exception as e:
-        print(f"[!] 配置迁移失败: {e}")
+        logger.warning(f"配置迁移失败: {e}")
         return False
 
 
@@ -102,7 +106,7 @@ def load_config() -> dict:
             with open(NEW_CONFIG_FILE, "r", encoding="utf-8") as f:
                 cfg = json.load(f)
         except json.JSONDecodeError as e:
-            print(f"[!] 配置文件格式错误: {e}")
+            logger.warning(f"配置文件格式错误: {e}")
             cfg = DEFAULT_CONFIG.copy()
     else:
         cfg = DEFAULT_CONFIG.copy()
