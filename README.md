@@ -395,7 +395,7 @@ uvicorn server:app --reload --host 0.0.0.0 --port 8000
 
 ## 🌟 Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=ccpopy/gemini-chat&type=Date)](https://www.star-history.com/#ccpopy/gemini-chat&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=ccpopy/gemini-chat&type=date&legend=top-left)](https://www.star-history.com/#ccpopy/gemini-chat&type=date&legend=top-left)
 
 ## 许可证
 
