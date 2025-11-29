@@ -1,6 +1,6 @@
 """版本信息管理模块"""
 
-# 版本号 (语义化版本: major.minor.patch)
+# 版本号
 VERSION = "1.0.0"
 
 # 版本信息
@@ -17,8 +17,8 @@ VERSION_INFO = {
     ],
 }
 
-# GitHub 仓库信息 (用于版本检测)
-GITHUB_REPO = ""  # 格式: "username/repo"，留空则禁用版本检测
+# GitHub 仓库信息，留空则禁用版本检测
+GITHUB_REPO = "ccpopy/gemini-chat"
 
 
 def get_version() -> str:

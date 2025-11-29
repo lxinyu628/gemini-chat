@@ -363,19 +363,14 @@ class AnthropicCompatClient:
             # Claude 模型名映射到 Gemini 模型
             model_mapping = {
                 # Claude 模型 -> Gemini 等效
-                "claude-3-opus": "gemini-2.5-pro",
-                "claude-3-sonnet": "gemini-2.5-pro",
-                "claude-3-haiku": "gemini-2.5-flash",
-                "claude-3-5-sonnet": "gemini-2.5-pro",
-                "claude-3-5-haiku": "gemini-2.5-flash",
-                "claude-opus-4": "gemini-2.5-pro",
-                "claude-sonnet-4": "gemini-2.5-pro",
+                "claude-haiku-4-5-20251001": "gemini-2.5-flash",
+                "claude-sonnet-4-5-20250929": "gemini-2.5-pro",
+                "claude-opus-4-5-20251101": "gemini-3-pro-preview",
                 # 直接使用 Gemini 模型名
                 "gemini-2.5-pro": "gemini-2.5-pro",
                 "gemini-2.5-flash": "gemini-2.5-flash",
                 "gemini-3-pro-preview": "gemini-3-pro-preview",
                 # 默认
-                "auto": None,
                 "business-gemini": None,
             }
 
