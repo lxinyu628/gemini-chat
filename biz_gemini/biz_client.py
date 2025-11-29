@@ -459,6 +459,8 @@ class BizGeminiClient:
         # Base64 编码文件内容
         file_content_b64 = base64.b64encode(file_content).decode("utf-8")
 
+        print(f"[DEBUG] add_context_file: session={session}, file_name={file_name}, mime_type={mime_type}, content_size={len(file_content)}")
+
         body = {
             "configId": self.group_id,
             "additionalParams": {"token": "-"},
@@ -481,16 +483,20 @@ class BizGeminiClient:
                 timeout=60,
             )
 
+            print(f"[DEBUG] add_context_file response: status={resp.status_code}")
+
             if resp.status_code == 401 and attempt == 0:
                 self.jwt_manager.refresh()
                 continue
 
             if resp.status_code != 200:
+                print(f"[DEBUG] add_context_file error: {resp.text[:500]}")
                 raise RuntimeError(
                     f"添加上下文文件失败: {resp.status_code} {resp.text[:200]}"
                 )
 
             data = resp.json()
+            print(f"[DEBUG] add_context_file success: {json.dumps(data, ensure_ascii=False)}")
             add_response = data.get("addContextFileResponse", {})
             return {
                 "session": add_response.get("session"),
@@ -595,17 +601,28 @@ class BizGeminiClient:
 
         raise RuntimeError("多次调用 widgetStreamAssist 失败。")
 
-    def _get_session_file_metadata(self, session_name: str, file_ids: Optional[List[str]] = None) -> dict:
-        """获取 session 中的文件元数据，包括下载链接"""
+    def _get_session_file_metadata(self, session_name: str, file_ids: Optional[List[str]] = None, filter_str: str = "") -> dict:
+        """获取 session 中的文件元数据，包括下载链接
+
+        Args:
+            session_name: 会话名称
+            file_ids: 可选的文件 ID 列表（目前未使用）
+            filter_str: 过滤条件，默认获取所有文件。
+                       可选值: "file_origin_type = AI_GENERATED" 只获取 AI 生成的文件
+                              "file_origin_type = USER_UPLOADED" 只获取用户上传的文件
+        """
         jwt = self.jwt_manager.get_jwt()
         body = {
             "configId": self.group_id,
             "additionalParams": {"token": "-"},
             "listSessionFileMetadataRequest": {
                 "name": session_name,
-                "filter": "file_origin_type = AI_GENERATED"
             }
         }
+
+        # 只有非空时才添加 filter
+        if filter_str:
+            body["listSessionFileMetadataRequest"]["filter"] = filter_str
 
         resp = requests.post(
             LIST_FILE_METADATA_URL,
@@ -640,6 +657,19 @@ class BizGeminiClient:
                 result[fid] = fm
 
         return result
+
+    def list_session_files(self, session_name: Optional[str] = None) -> List[dict]:
+        """获取会话中的所有文件（包括用户上传和 AI 生成的）
+
+        Args:
+            session_name: 会话名称，如果不提供则使用当前会话
+
+        Returns:
+            文件元数据列表
+        """
+        session = session_name or self.session_name
+        metadata = self._get_session_file_metadata(session, filter_str="")
+        return list(metadata.values())
 
     def _build_correct_download_url(self, session_name: str, file_id: str) -> str:
         """构造正确的下载 URL

@@ -5,7 +5,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional, Union
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect, Header
+from fastapi import FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect, Header, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -738,6 +738,8 @@ async def chat_completions(request: ChatRequest):
     session_id = request.session_id or str(uuid.uuid4())
     client, session_data = get_or_create_client(session_id)
 
+    print(f"[DEBUG] 聊天请求: session_id={session_id}, session_name={session_data.get('session_name')}")
+
     # 保存用户消息
     user_message = request.messages[-1] if request.messages else None
     if user_message:
@@ -981,7 +983,7 @@ async def anthropic_messages(
 @app.post("/api/upload")
 async def upload_file(
     file: UploadFile = File(...),
-    session_id: Optional[str] = None,
+    session_id: Optional[str] = Form(None),
 ):
     """上传文件到当前会话
 
@@ -998,27 +1000,33 @@ async def upload_file(
         # 读取文件内容
         file_content = await file.read()
 
+        print(f"[DEBUG] 文件上传请求: filename={file.filename}, size={len(file_content)}, session_id={session_id}")
+
         # 获取客户端
         if session_id:
             _, session_data = get_or_create_client(session_id)
             biz_client = session_data["biz_client"]
             session_name = session_data["session_name"]
+            print(f"[DEBUG] 使用 OpenAI 会话: session_id={session_id}, session_name={session_name}")
         else:
             # 使用 Anthropic 默认会话
             _, session_data = get_or_create_anthropic_client("default")
             biz_client = session_data["biz_client"]
             session_name = session_data["session_name"]
+            print(f"[DEBUG] 使用 Anthropic 默认会话: session_name={session_name}")
 
         # 确定 MIME 类型
         mime_type = file.content_type or "application/octet-stream"
 
         # 上传文件
+        print(f"[DEBUG] 正在上传文件到 session: {session_name}")
         result = biz_client.add_context_file(
             file_name=file.filename,
             file_content=file_content,
             mime_type=mime_type,
             session_name=session_name,
         )
+        print(f"[DEBUG] 文件上传结果: {result}")
 
         return {
             "success": True,
@@ -1026,6 +1034,7 @@ async def upload_file(
             "content_type": mime_type,
             "file_id": result.get("file_id"),
             "token_count": result.get("token_count"),
+            "session_name": session_name,
             "message": "文件上传成功",
         }
     except HTTPException:
@@ -1101,6 +1110,57 @@ async def list_anthropic_sessions():
             "message_count": len(data.get("messages", [])),
         })
     return result
+
+
+@app.get("/api/sessions/{session_id}/files")
+async def list_session_files(session_id: str):
+    """列出会话中的所有文件（用于调试）
+
+    Args:
+        session_id: 会话 ID
+    """
+    try:
+        config = load_config()
+        missing = [k for k in ("secure_c_ses", "csesidx", "group_id") if not config.get(k)]
+        if missing:
+            raise HTTPException(status_code=401, detail="未登录")
+
+        # 查找会话
+        session_data = None
+        session_name = None
+
+        # 先在 OpenAI sessions 中查找
+        if session_id in sessions:
+            session_data = sessions[session_id]
+            session_name = session_data.get("session_name")
+        # 再在 Anthropic sessions 中查找
+        elif session_id in anthropic_sessions:
+            session_data = anthropic_sessions[session_id]
+            session_name = session_data.get("session_name")
+        else:
+            # 尝试直接作为 session_name 使用
+            session_name = session_id
+
+        if not session_name:
+            raise HTTPException(status_code=404, detail="会话不存在")
+
+        # 获取文件列表
+        jwt_manager = JWTManager(config=config)
+        biz_client = BizGeminiClient(config, jwt_manager)
+        files = biz_client.list_session_files(session_name)
+
+        return {
+            "session_id": session_id,
+            "session_name": session_name,
+            "files": files,
+            "count": len(files),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/images/{filename}")

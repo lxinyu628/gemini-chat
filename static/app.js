@@ -776,12 +776,17 @@ async function sendMessage() {
 
     // 如果有文件，先上传
     let uploadedFileNames = [];
+    let uploadResults = [];
     if (state.uploadedFiles.length > 0) {
+        console.log('[DEBUG] 开始上传文件, session_id:', state.currentConversationId);
+
         try {
             for (const file of state.uploadedFiles) {
                 const formData = new FormData();
                 formData.append('file', file);
                 formData.append('session_id', state.currentConversationId);
+
+                console.log('[DEBUG] 上传文件:', file.name, 'size:', file.size);
 
                 const uploadResp = await fetch('/api/upload', {
                     method: 'POST',
@@ -791,34 +796,50 @@ async function sendMessage() {
                 if (uploadResp.ok) {
                     const result = await uploadResp.json();
                     uploadedFileNames.push(file.name);
-                    console.log('文件上传成功:', result);
+                    uploadResults.push(result);
+                    console.log('[DEBUG] 文件上传成功:', result);
                 } else {
-                    console.error('文件上传失败:', await uploadResp.text());
+                    const errorText = await uploadResp.text();
+                    console.error('[DEBUG] 文件上传失败:', errorText);
                 }
             }
         } catch (err) {
-            console.error('文件上传错误:', err);
+            console.error('[DEBUG] 文件上传错误:', err);
         }
 
         // 清空已上传的文件
         state.uploadedFiles = [];
         renderFilePreview();
+
+        console.log('[DEBUG] 上传完成, 成功:', uploadedFileNames.length, '个文件');
     }
 
-    // 构建消息内容（如果有文件，可以在消息中添加提示）
+    // 构建消息内容
     let finalMessage = message;
-    if (uploadedFileNames.length > 0 && !message) {
-        finalMessage = `请分析上传的文件: ${uploadedFileNames.join(', ')}`;
+    let displayMessage = message;
+
+    // 如果有上传的文件，在消息中添加提示
+    if (uploadedFileNames.length > 0) {
+        const fileList = uploadedFileNames.join(', ');
+        if (!message) {
+            finalMessage = `请分析上传的文件: ${fileList}`;
+            displayMessage = `[已上传文件: ${fileList}]\n请分析这些文件`;
+        } else {
+            // 在消息前添加文件信息
+            displayMessage = `[已上传文件: ${fileList}]\n${message}`;
+        }
     }
 
-    // 显示用户消息
-    appendMessage('user', finalMessage);
+    // 显示用户消息（包含文件信息）
+    appendMessage('user', displayMessage);
 
     // 清空输入
     elements.messageInput.value = '';
     elements.messageInput.style.height = 'auto';
     elements.messageInput.style.overflowY = 'hidden';
     updateSendButton();
+
+    console.log('[DEBUG] 发送消息, session_id:', state.currentConversationId);
 
     // 显示加载指示器
     const loadingId = showTypingIndicator();
