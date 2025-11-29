@@ -1224,10 +1224,10 @@ async def download_session_image(session_id: str, file_id: str, session_name: st
         jwt_manager = JWTManager(config=config)
         biz_client = BizGeminiClient(config, jwt_manager)
 
-        # 确定 session_name
-        target_session_name = session_name or session_id
+        # 确定 session_name（用于查询文件元数据）
+        query_session_name = session_name or f"collections/default_collection/engines/agentspace-engine/sessions/{session_id}"
 
-        print(f"[DEBUG] 下载图片请求: session_id={session_id}, file_id={file_id}, session_name={target_session_name}")
+        print(f"[DEBUG] 下载图片请求: session_id={session_id}, file_id={file_id}, query_session_name={query_session_name}")
 
         # 先检查本地缓存（按 file_id 匹配文件名）
         for ext in [".png", ".jpg", ".jpeg", ".gif", ".webp"]:
@@ -1244,22 +1244,25 @@ async def download_session_image(session_id: str, file_id: str, session_name: st
                 }.get(ext, "image/png")
                 return FileResponse(alt_path, media_type=alt_mime)
 
-        # 获取文件元数据以确定文件名和 MIME 类型
-        file_metadata = biz_client._get_session_file_metadata(target_session_name)
+        # 获取文件元数据 - 使用 AI_GENERATED filter 获取生成的图片
+        file_metadata = biz_client._get_session_file_metadata(query_session_name, filter_str="file_origin_type = AI_GENERATED")
         print(f"[DEBUG] 获取到的文件元数据 keys: {list(file_metadata.keys())}")
 
         meta = file_metadata.get(file_id, {})
         print(f"[DEBUG] file_id={file_id} 的元数据: {meta}")
 
         if not meta:
-            # 如果没有找到元数据，尝试用不同格式的 filter
-            file_metadata_all = biz_client._get_session_file_metadata(target_session_name, filter_str="")
+            # 如果没有找到，尝试不带 filter
+            file_metadata_all = biz_client._get_session_file_metadata(query_session_name, filter_str="")
             print(f"[DEBUG] 所有文件元数据 keys: {list(file_metadata_all.keys())}")
             meta = file_metadata_all.get(file_id, {})
 
         file_name = meta.get("name", f"gemini_{file_id}.png")
         mime_type = meta.get("mimeType", "image/png")
-        full_session = meta.get("session") or target_session_name
+        # 使用元数据中的完整 session 路径（包含 project_id）
+        full_session = meta.get("session") or query_session_name
+
+        print(f"[DEBUG] 使用完整 session 路径: {full_session}")
 
         # 检查本地是否已有缓存（使用实际文件名）
         local_path = os.path.join(IMAGES_DIR, file_name)

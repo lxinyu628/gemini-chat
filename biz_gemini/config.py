@@ -32,6 +32,7 @@ DEFAULT_CONFIG = {
         "nid": "",
         "csesidx": "",
         "group_id": "",
+        "project_id": "",
         "cookies_saved_at": "",
     },
 }
@@ -61,7 +62,7 @@ def migrate_old_config() -> bool:
         new_cfg = DEFAULT_CONFIG.copy()
         
         # 迁移 session 配置
-        session_keys = ["secure_c_ses", "host_c_oses", "nid", "csesidx", "group_id", "cookies_saved_at", "saved_at"]
+        session_keys = ["secure_c_ses", "host_c_oses", "nid", "csesidx", "group_id", "project_id", "cookies_saved_at", "saved_at"]
         for key in session_keys:
             if key in old_cfg:
                 if key == "saved_at":
@@ -143,6 +144,8 @@ def load_config() -> dict:
         cfg["session"]["csesidx"] = os.getenv("BIZ_GEMINI_CSESIDX")
     if os.getenv("BIZ_GEMINI_GROUP_ID"):
         cfg["session"]["group_id"] = os.getenv("BIZ_GEMINI_GROUP_ID")
+    if os.getenv("BIZ_GEMINI_PROJECT_ID"):
+        cfg["session"]["project_id"] = os.getenv("BIZ_GEMINI_PROJECT_ID")
 
     # 为了向后兼容，将 session 配置提升到顶层
     # 这样旧代码可以继续使用 config.get("secure_c_ses") 等
@@ -167,7 +170,7 @@ def save_config(update: dict) -> dict:
     cfg = load_config()
     
     # 如果 update 包含旧格式的顶层字段，映射到新结构
-    session_keys = ["secure_c_ses", "host_c_oses", "nid", "csesidx", "group_id", "cookies_saved_at", "saved_at"]
+    session_keys = ["secure_c_ses", "host_c_oses", "nid", "csesidx", "group_id", "project_id", "cookies_saved_at", "saved_at"]
     for key in session_keys:
         if key in update:
             if key == "saved_at":

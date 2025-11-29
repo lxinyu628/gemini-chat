@@ -432,7 +432,11 @@ class BizGeminiClient:
                     f"获取会话详情失败: {resp.status_code} {resp.text[:200]}"
                 )
 
-            return resp.json()
+            data = resp.json()
+            session_data = data.get("session", {})
+            full_session_name = session_data.get("name", "")
+            print(f"[DEBUG] get_session response session.name: {full_session_name}")
+            return data
 
         raise RuntimeError("多次尝试获取会话详情失败（可能是 cookie 失效，需要重新登录）。")
 
@@ -654,9 +658,12 @@ class BizGeminiClient:
             )
 
         if resp.status_code != 200:
+            print(f"[DEBUG] _get_session_file_metadata error: {resp.status_code} {resp.text[:200]}")
             return {}
 
         data = resp.json()
+        print(f"[DEBUG] _get_session_file_metadata response: {json.dumps(data, ensure_ascii=False)[:500]}")
+
         result = {}
         file_metadata_list = data.get("listSessionFileMetadataResponse", {}).get("fileMetadata", [])
         for fm in file_metadata_list:
@@ -686,9 +693,13 @@ class BizGeminiClient:
         - 域名: biz-discoveryengine.googleapis.com (不是 discoveryengine.googleapis.com)
         - 版本: v1alpha (不是 v1)
         - 参数名: fileId (驼峰，不是 file_id 下划线)
+
+        session_name 应该使用从 widgetListSessionFileMetadata 响应中获取的完整路径，
+        格式如: projects/xxx/locations/global/collections/default_collection/engines/agentspace-engine/sessions/xxx
         """
-        # session_name 格式: projects/xxx/locations/global/collections/default_collection/engines/agentspace-engine/sessions/xxx
-        return f"https://biz-discoveryengine.googleapis.com/v1alpha/{session_name}:downloadFile?fileId={file_id}&alt=media"
+        url = f"https://biz-discoveryengine.googleapis.com/v1alpha/{session_name}:downloadFile?fileId={file_id}&alt=media"
+        print(f"[DEBUG] 构造下载 URL: {url}")
+        return url
 
     def _download_file_with_jwt(self, download_uri: str, session_name: Optional[str] = None, file_id: Optional[str] = None) -> bytes:
         """使用 JWT 认证下载文件
