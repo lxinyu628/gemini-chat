@@ -1112,7 +1112,7 @@ function createThinkingBlock(thinking, isActive = false) {
 
   const text = document.createElement('div');
   text.className = 'thinking-text';
-  text.textContent = thinking;
+  text.innerHTML = renderMarkdown(thinking);
 
   // 添加斜体提示文字
   const hint = document.createElement('div');
