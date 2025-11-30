@@ -818,6 +818,9 @@ async function sendMessage() {
         const formData = new FormData();
         formData.append('file', file);
         formData.append('session_id', state.currentConversationId);
+        if (state.currentSessionName) {
+          formData.append('session_name', state.currentSessionName);
+        }
 
         console.log('[DEBUG] 上传文件:', file.name, 'size:', file.size);
 
@@ -886,6 +889,7 @@ async function sendMessage() {
         messages: [{ role: 'user', content: finalMessage }],
         stream: false,
         session_id: state.currentConversationId,
+        session_name: state.currentSessionName,
         include_image_data: true
       })
     });

@@ -92,6 +92,7 @@ class ChatRequest(BaseModel):
     messages: List[Message]
     stream: bool = False
     session_id: Optional[str] = None
+    session_name: Optional[str] = None
     include_image_data: bool = True
     include_thoughts: bool = False  # 是否返回思考链
     embed_images_in_content: bool = True  # 是否将图片内嵌到 content（OpenAI 兼容模式）
@@ -139,7 +140,7 @@ class SessionInfo(BaseModel):
     message_count: int
 
 
-def get_or_create_client(session_id: str) -> tuple[OpenAICompatClient, dict, str]:
+def get_or_create_client(session_id: str, session_name: Optional[str] = None) -> tuple[OpenAICompatClient, dict, str]:
     """获取或创建指定会话的客户端
 
     Returns:
@@ -158,8 +159,12 @@ def get_or_create_client(session_id: str) -> tuple[OpenAICompatClient, dict, str
     jwt_manager = JWTManager(config=config)
     biz_client = BizGeminiClient(config, jwt_manager)
     client = OpenAICompatClient(biz_client)
-    # 创建 Gemini 会话并获取 session_name
-    session_name = biz_client.session_name
+
+    # 如果提供了 session_name（来自历史会话），直接复用该会话，而不是创建新会话
+    if session_name:
+        biz_client._session_name = session_name  # 直接指定已有的 session name 以保持上下文
+    else:
+        session_name = biz_client.session_name  # 创建新会话并获取 session_name
 
     # 从 session_name 提取真实的 session_id
     real_session_id = session_name.split("/")[-1] if "/" in session_name else session_name
@@ -167,9 +172,8 @@ def get_or_create_client(session_id: str) -> tuple[OpenAICompatClient, dict, str
     # 判断传入的 session_id 是否是临时 UUID（格式：xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx）
     is_temp_uuid = len(session_id) == 36 and session_id.count("-") == 4
 
-    if is_temp_uuid and real_session_id != session_id:
-        # 传入的是临时 UUID，需要迁移到真实 session_id
-        logger.debug(f"会话 ID 迁移: {session_id} -> {real_session_id}")
+    # 优先使用真实的 session_id 作为 canonical（避免重复创建会话）
+    if real_session_id and (is_temp_uuid or real_session_id != session_id):
         canonical_id = real_session_id
     else:
         canonical_id = session_id
@@ -960,7 +964,7 @@ async def chat_completions(
 
     # 会话 ID 优先级: X-Session-Id header > Conversation-Id header > body.session_id > 新建
     session_id = x_session_id or conversation_id or request.session_id or str(uuid.uuid4())
-    client, session_data, canonical_session_id = get_or_create_client(session_id)
+    client, session_data, canonical_session_id = get_or_create_client(session_id, request.session_name)
 
     # 获取待发送的文件 ID
     pending_file_ids = session_data.get("pending_file_ids", [])
@@ -1222,6 +1226,7 @@ async def anthropic_messages(
 async def upload_file(
     file: UploadFile = File(...),
     session_id: Optional[str] = Form(None),
+    session_name: Optional[str] = Form(None),
 ) -> dict:
     """上传文件到当前会话
 
@@ -1242,7 +1247,7 @@ async def upload_file(
 
         # 获取客户端
         if session_id:
-            _, session_data, canonical_session_id = get_or_create_client(session_id)
+            _, session_data, canonical_session_id = get_or_create_client(session_id, session_name)
             biz_client = session_data["biz_client"]
             session_name = session_data["session_name"]
             logger.debug(f"使用 OpenAI 会话: session_id={session_id}, canonical_session_id={canonical_session_id}, session_name={session_name}")
