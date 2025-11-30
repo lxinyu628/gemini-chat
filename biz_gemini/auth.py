@@ -364,18 +364,14 @@ def _get_jwt_via_api(config: Optional[dict] = None) -> dict:
         config = load_config()
 
     secure_c_ses = config.get("secure_c_ses")
-    host_c_oses = config.get("host_c_oses")
-    nid = config.get("nid")
     csesidx = config.get("csesidx")
     if not secure_c_ses or not csesidx:
         raise ValueError("缺少 secure_c_ses / csesidx，请先运行 `python app.py login`")
 
     proxy = get_proxy(config)
-    cookie_str = f"__Secure-C_SES={secure_c_ses}"
-    if host_c_oses:
-        cookie_str += f"; __Host-C_OSES={host_c_oses}"
-    if nid:
-        cookie_str += f"; NID={nid}"
+
+    # 使用 _build_cookie_header 构造 Cookie（优先使用 cookie_raw）
+    cookie_str, _ = _build_cookie_header(config)
 
     url = f"{GETOXSRF_URL}?csesidx={csesidx}"
 
