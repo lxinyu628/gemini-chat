@@ -41,6 +41,24 @@ DEFAULT_CONFIG = {
         "cookie_raw": "",  # 完整的 raw cookie header（优先使用）
         "cookie_profile_dir": "",  # cookie 来源的浏览器用户数据目录
     },
+    # 浏览器保活配置
+    "browser_keep_alive": {
+        "enabled": False,  # 是否启用浏览器保活
+        "interval_minutes": 60,  # 保活间隔（分钟）
+        "headless": True,  # 是否无头模式
+    },
+    # 账号状态（运行时状态，不持久化到配置文件）
+    "account_state": {
+        "jwt": "",  # 缓存的 JWT
+        "jwt_time": 0,  # JWT 获取时间戳
+        "jwt_expires_at": 0,  # JWT 过期时间戳
+        "available": True,  # 账号是否可用
+        "cookie_expired": False,  # Cookie 是否已过期
+        "cooldown_until": 0,  # 冷却结束时间戳
+        "cooldown_reason": "",  # 冷却原因
+        "last_refresh_time": 0,  # 上次刷新时间
+        "conversation_sessions": {},  # 对话 ID -> session 映射
+    },
 }
 
 
@@ -282,6 +300,21 @@ def cookies_expired(config: dict, max_age_hours: int = 0) -> bool:
 _config_cache = None
 _config_mtime = None
 
+# 账号状态（运行时状态，线程安全）
+import threading
+_account_state_lock = threading.RLock()
+_account_state: Dict[str, Any] = {
+    "jwt": "",
+    "jwt_time": 0,
+    "jwt_expires_at": 0,
+    "available": True,
+    "cookie_expired": False,
+    "cooldown_until": 0,
+    "cooldown_reason": "",
+    "last_refresh_time": 0,
+    "conversation_sessions": {},
+}
+
 
 def get_cached_config(force_reload: bool = False) -> dict:
     """获取缓存的配置，支持文件变更检测"""
@@ -305,3 +338,108 @@ def get_cached_config(force_reload: bool = False) -> dict:
 def reload_config() -> dict:
     """强制重新加载配置"""
     return get_cached_config(force_reload=True)
+
+
+# ==================== 账号状态管理 ====================
+
+def get_account_state() -> Dict[str, Any]:
+    """获取账号状态（线程安全）"""
+    with _account_state_lock:
+        return _account_state.copy()
+
+
+def update_account_state(updates: Dict[str, Any]) -> None:
+    """更新账号状态（线程安全）"""
+    with _account_state_lock:
+        _account_state.update(updates)
+
+
+def get_cached_jwt() -> tuple[Optional[str], float]:
+    """获取缓存的 JWT 和过期时间戳"""
+    with _account_state_lock:
+        return _account_state.get("jwt"), _account_state.get("jwt_expires_at", 0)
+
+
+def set_cached_jwt(jwt: str, expires_at: float) -> None:
+    """设置缓存的 JWT"""
+    import time
+    with _account_state_lock:
+        _account_state["jwt"] = jwt
+        _account_state["jwt_time"] = time.time()
+        _account_state["jwt_expires_at"] = expires_at
+
+
+def clear_jwt_cache() -> None:
+    """清除 JWT 缓存（Cookie 刷新后调用）"""
+    with _account_state_lock:
+        _account_state["jwt"] = ""
+        _account_state["jwt_time"] = 0
+        _account_state["jwt_expires_at"] = 0
+
+
+def mark_cookie_expired(reason: str = "") -> None:
+    """标记 Cookie 已过期"""
+    with _account_state_lock:
+        _account_state["cookie_expired"] = True
+        _account_state["available"] = False
+        if reason:
+            _account_state["cooldown_reason"] = reason
+    logger.warning(f"Cookie 已标记为过期: {reason}")
+
+
+def mark_cookie_valid() -> None:
+    """标记 Cookie 有效（刷新成功后调用）"""
+    import time
+    with _account_state_lock:
+        _account_state["cookie_expired"] = False
+        _account_state["available"] = True
+        _account_state["cooldown_until"] = 0
+        _account_state["cooldown_reason"] = ""
+        _account_state["last_refresh_time"] = time.time()
+
+
+def is_cookie_expired() -> bool:
+    """检查 Cookie 是否已标记为过期"""
+    with _account_state_lock:
+        return _account_state.get("cookie_expired", False)
+
+
+def set_cooldown(duration_seconds: int, reason: str = "") -> None:
+    """设置账号冷却"""
+    import time
+    with _account_state_lock:
+        _account_state["cooldown_until"] = time.time() + duration_seconds
+        _account_state["cooldown_reason"] = reason
+        _account_state["available"] = False
+    logger.info(f"账号进入冷却: {duration_seconds}s, 原因: {reason}")
+
+
+def is_in_cooldown() -> tuple[bool, float]:
+    """检查是否在冷却中，返回 (是否冷却, 剩余秒数)"""
+    import time
+    with _account_state_lock:
+        cooldown_until = _account_state.get("cooldown_until", 0)
+        if cooldown_until > time.time():
+            return True, cooldown_until - time.time()
+        return False, 0
+
+
+def get_conversation_session(conversation_id: str) -> Optional[str]:
+    """获取对话对应的 session"""
+    with _account_state_lock:
+        return _account_state.get("conversation_sessions", {}).get(conversation_id)
+
+
+def set_conversation_session(conversation_id: str, session_name: str) -> None:
+    """设置对话对应的 session"""
+    with _account_state_lock:
+        if "conversation_sessions" not in _account_state:
+            _account_state["conversation_sessions"] = {}
+        _account_state["conversation_sessions"][conversation_id] = session_name
+
+
+def clear_conversation_sessions() -> None:
+    """清除所有对话 session 映射（JWT 刷新后调用）"""
+    with _account_state_lock:
+        _account_state["conversation_sessions"] = {}
+    logger.debug("已清除所有对话 session 映射")

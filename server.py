@@ -11,14 +11,26 @@ from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from biz_gemini.auth import JWTManager, check_session_status
+from biz_gemini.auth import JWTManager, check_session_status, ensure_jwt_valid
 from biz_gemini.biz_client import BizGeminiClient
-from biz_gemini.config import cookies_age_seconds, cookies_expired, load_config, reload_config, save_config, get_proxy
+from biz_gemini.config import (
+    cookies_age_seconds,
+    cookies_expired,
+    get_proxy,
+    is_cookie_expired,
+    load_config,
+    reload_config,
+    save_config,
+)
 from biz_gemini.openai_adapter import OpenAICompatClient
 from biz_gemini.anthropic_adapter import AnthropicCompatClient
 from biz_gemini.web_login import get_login_service
 from biz_gemini.remote_browser import get_browser_service, BrowserSessionStatus
-from biz_gemini.keep_alive import get_keep_alive_service
+from biz_gemini.keep_alive import get_keep_alive_service, notify_auth_error
+from biz_gemini.browser_keep_alive import (
+    get_browser_keep_alive_service,
+    try_refresh_cookie_via_browser,
+)
 from biz_gemini.logger import get_logger
 from config_watcher import start_config_watcher, stop_config_watcher
 from version import VERSION, get_version_info, GITHUB_REPO
@@ -63,11 +75,29 @@ async def startup_event() -> None:
     start_config_watcher(callback=on_config_changed)
     logger.info("配置监控已启动")
 
+    # 加载配置
+    config = load_config()
+    browser_keep_alive_config = config.get("browser_keep_alive", {})
+
     # 启动 Session 保活服务
     logger.info("启动 Session 保活服务...")
-    keep_alive = get_keep_alive_service(interval_minutes=10)
+    auto_browser_refresh = browser_keep_alive_config.get("enabled", False)
+    keep_alive = get_keep_alive_service(
+        interval_minutes=10,
+        auto_browser_refresh=auto_browser_refresh,
+    )
     await keep_alive.start()
-    logger.info("Session 保活服务已启动（每 10 分钟检查一次）")
+    logger.info(f"Session 保活服务已启动（每 10 分钟检查一次，自动浏览器刷新: {auto_browser_refresh}）")
+
+    # 启动浏览器保活服务（如果启用）
+    if browser_keep_alive_config.get("enabled", False):
+        logger.info("启动浏览器保活服务...")
+        browser_keep_alive = get_browser_keep_alive_service(
+            interval_minutes=browser_keep_alive_config.get("interval_minutes", 60),
+            headless=browser_keep_alive_config.get("headless", True),
+        )
+        await browser_keep_alive.start()
+        logger.info(f"浏览器保活服务已启动（每 {browser_keep_alive_config.get('interval_minutes', 60)} 分钟刷新一次）")
 
 @app.on_event("shutdown")
 async def shutdown_event() -> None:
@@ -76,6 +106,14 @@ async def shutdown_event() -> None:
     keep_alive = get_keep_alive_service()
     await keep_alive.stop()
     logger.info("Session 保活服务已停止")
+
+    # 停止浏览器保活服务
+    config = load_config()
+    if config.get("browser_keep_alive", {}).get("enabled", False):
+        logger.info("停止浏览器保活服务...")
+        browser_keep_alive = get_browser_keep_alive_service()
+        await browser_keep_alive.stop()
+        logger.info("浏览器保活服务已停止")
 
     logger.info("停止配置文件监控...")
     stop_config_watcher()
@@ -1835,6 +1873,127 @@ async def keep_alive_stop() -> dict:
         return {"success": True, "message": "服务未运行"}
     await service.stop()
     return {"success": True, "message": "服务已停止"}
+
+
+# ==================== 浏览器保活服务 ====================
+
+@app.get("/api/browser-keep-alive/status")
+async def browser_keep_alive_status() -> dict:
+    """获取浏览器保活服务状态"""
+    config = load_config()
+    browser_config = config.get("browser_keep_alive", {})
+
+    if not browser_config.get("enabled", False):
+        return {
+            "enabled": False,
+            "message": "浏览器保活服务未启用，可在 config.json 中设置 browser_keep_alive.enabled = true",
+        }
+
+    service = get_browser_keep_alive_service()
+    status = service.get_status()
+    status["enabled"] = True
+    return status
+
+
+@app.post("/api/browser-keep-alive/start")
+async def browser_keep_alive_start() -> dict:
+    """启动浏览器保活服务"""
+    config = load_config()
+    browser_config = config.get("browser_keep_alive", {})
+
+    service = get_browser_keep_alive_service(
+        interval_minutes=browser_config.get("interval_minutes", 60),
+        headless=browser_config.get("headless", True),
+    )
+
+    if service._running:
+        return {"success": True, "message": "服务已在运行"}
+
+    await service.start()
+    return {"success": True, "message": "浏览器保活服务已启动"}
+
+
+@app.post("/api/browser-keep-alive/stop")
+async def browser_keep_alive_stop() -> dict:
+    """停止浏览器保活服务"""
+    service = get_browser_keep_alive_service()
+    if not service._running:
+        return {"success": True, "message": "服务未运行"}
+    await service.stop()
+    return {"success": True, "message": "浏览器保活服务已停止"}
+
+
+@app.post("/api/browser-keep-alive/refresh")
+async def browser_keep_alive_refresh_now() -> dict:
+    """立即执行一次浏览器保活刷新"""
+    service = get_browser_keep_alive_service()
+    result = await service.refresh_now()
+    return result
+
+
+# ==================== Cookie 刷新 ====================
+
+@app.post("/api/cookie/refresh")
+async def refresh_cookie(headless: bool = True) -> dict:
+    """手动刷新 Cookie（通过浏览器）
+
+    Args:
+        headless: 是否无头模式，默认 True
+
+    Returns:
+        {
+            "success": bool,
+            "message": str,
+            "needs_manual_login": bool,  # 是否需要手动登录
+        }
+    """
+    try:
+        result = await try_refresh_cookie_via_browser(headless=headless)
+        return result
+    except Exception as e:
+        logger.error(f"刷新 Cookie 失败: {e}")
+        return {
+            "success": False,
+            "message": str(e),
+            "needs_manual_login": False,
+        }
+
+
+@app.get("/api/cookie/status")
+async def cookie_status() -> dict:
+    """获取 Cookie 状态"""
+    from biz_gemini.config import get_account_state, is_in_cooldown
+
+    config = load_config()
+    account_state = get_account_state()
+    in_cooldown, cooldown_remaining = is_in_cooldown()
+
+    # 获取 Cookie 保存时间
+    cookies_saved_at = config.get("cookies_saved_at") or config.get("session", {}).get("cookies_saved_at")
+    age_seconds = cookies_age_seconds(config)
+
+    return {
+        "has_credentials": bool(config.get("secure_c_ses") and config.get("csesidx")),
+        "cookie_expired": is_cookie_expired(),
+        "cookies_saved_at": cookies_saved_at,
+        "age_seconds": age_seconds,
+        "age_hours": round(age_seconds / 3600, 2) if age_seconds else None,
+        "available": account_state.get("available", True),
+        "in_cooldown": in_cooldown,
+        "cooldown_remaining_seconds": round(cooldown_remaining, 0) if in_cooldown else 0,
+        "cooldown_reason": account_state.get("cooldown_reason", ""),
+        "jwt_cached": bool(account_state.get("jwt")),
+        "jwt_expires_at": account_state.get("jwt_expires_at", 0),
+    }
+
+
+@app.post("/api/cookie/mark-valid")
+async def mark_cookie_valid_endpoint() -> dict:
+    """手动标记 Cookie 为有效（用于调试）"""
+    from biz_gemini.config import mark_cookie_valid as _mark_valid
+
+    _mark_valid()
+    return {"success": True, "message": "Cookie 已标记为有效"}
 
 
 # ==================== 版本管理 ====================

@@ -11,11 +11,18 @@ import httpx
 
 from .config import (
     TIME_FMT,
+    clear_conversation_sessions,
+    clear_jwt_cache,
     cookies_expired,
+    get_cached_jwt,
     get_proxy,
+    is_cookie_expired,
     load_config,
+    mark_cookie_expired,
+    mark_cookie_valid,
     sanitize_group_id,
     save_config,
+    set_cached_jwt,
 )
 from .logger import get_logger
 
@@ -420,25 +427,155 @@ def _get_jwt_via_api(config: Optional[dict] = None) -> dict:
     }
 
 
+# JWT 有效期阈值（秒），超过此时间需要刷新
+JWT_REFRESH_THRESHOLD = 240  # 4 分钟
+
+
 @dataclass
 class JWTManager:
-    """管理 JWT，自动在过期前刷新。"""
+    """管理 JWT，自动在过期前刷新。
+
+    支持全局缓存，避免重复获取 JWT。
+    当 Cookie 刷新后，需要调用 invalidate() 清除缓存。
+    """
 
     config: dict
     _jwt: Optional[str] = None
     _expires_at_ts: float = 0.0
+    use_global_cache: bool = True  # 是否使用全局缓存
 
     def get_jwt(self) -> str:
+        """获取有效的 JWT，必要时自动刷新"""
         now = time.time()
-        # 提前 60s 刷新
+
+        # 首先检查全局缓存
+        if self.use_global_cache:
+            cached_jwt, cached_expires = get_cached_jwt()
+            if cached_jwt and cached_expires > now + 60:
+                self._jwt = cached_jwt
+                self._expires_at_ts = cached_expires
+                return cached_jwt
+
+        # 检查实例缓存，提前 60s 刷新
         if not self._jwt or now > self._expires_at_ts - 60:
             self.refresh()
         return self._jwt  # type: ignore[return-value]
 
     def refresh(self) -> None:
+        """刷新 JWT"""
         result = _get_jwt_via_api(self.config)
         self._jwt = result["jwt"]
         self._expires_at_ts = result["expires_at_ts"]
+
+        # 更新全局缓存
+        if self.use_global_cache:
+            set_cached_jwt(self._jwt, self._expires_at_ts)
+
+        logger.debug(f"JWT 已刷新，过期时间: {datetime.fromtimestamp(self._expires_at_ts).strftime('%H:%M:%S')}")
+
+    def invalidate(self) -> None:
+        """使 JWT 缓存失效（Cookie 刷新后调用）"""
+        self._jwt = None
+        self._expires_at_ts = 0.0
+        if self.use_global_cache:
+            clear_jwt_cache()
+        logger.debug("JWT 缓存已清除")
+
+
+def ensure_jwt_valid(config: Optional[dict] = None, threshold_seconds: int = JWT_REFRESH_THRESHOLD) -> dict:
+    """确保 JWT 有效，必要时刷新。
+
+    这是所有对外请求入口应该调用的函数。
+
+    Args:
+        config: 配置字典，如果为 None 则自动加载
+        threshold_seconds: JWT 刷新阈值（秒），默认 240s
+
+    Returns:
+        包含 jwt 和状态信息的字典:
+        {
+            "valid": bool,
+            "jwt": str | None,
+            "refreshed": bool,  # 是否进行了刷新
+            "error": str | None,
+        }
+    """
+    if config is None:
+        config = load_config()
+
+    # 检查 Cookie 是否已标记为过期
+    if is_cookie_expired():
+        return {
+            "valid": False,
+            "jwt": None,
+            "refreshed": False,
+            "error": "Cookie 已过期，需要重新登录或刷新",
+        }
+
+    # 检查必要的凭证
+    if not config.get("secure_c_ses") or not config.get("csesidx"):
+        return {
+            "valid": False,
+            "jwt": None,
+            "refreshed": False,
+            "error": "缺少凭证信息",
+        }
+
+    now = time.time()
+
+    # 检查全局缓存
+    cached_jwt, cached_expires = get_cached_jwt()
+    if cached_jwt and cached_expires > now + threshold_seconds:
+        return {
+            "valid": True,
+            "jwt": cached_jwt,
+            "refreshed": False,
+            "error": None,
+        }
+
+    # 需要刷新 JWT
+    try:
+        result = _get_jwt_via_api(config)
+        jwt = result["jwt"]
+        expires_at = result["expires_at_ts"]
+
+        # 更新全局缓存
+        set_cached_jwt(jwt, expires_at)
+
+        # 标记 Cookie 有效
+        mark_cookie_valid()
+
+        logger.info(f"JWT 已刷新，过期时间: {datetime.fromtimestamp(expires_at).strftime('%H:%M:%S')}")
+
+        return {
+            "valid": True,
+            "jwt": jwt,
+            "refreshed": True,
+            "error": None,
+        }
+    except Exception as e:
+        error_msg = str(e)
+
+        # 检查是否是认证错误
+        if "401" in error_msg or "expired" in error_msg.lower() or "过期" in error_msg:
+            mark_cookie_expired(error_msg)
+
+        logger.warning(f"JWT 刷新失败: {error_msg}")
+
+        return {
+            "valid": False,
+            "jwt": None,
+            "refreshed": False,
+            "error": error_msg,
+        }
+
+
+def on_cookie_refreshed() -> None:
+    """Cookie 刷新后的回调，清理 JWT 和 session 缓存"""
+    clear_jwt_cache()
+    clear_conversation_sessions()
+    mark_cookie_valid()
+    logger.info("Cookie 已刷新，JWT 和 session 缓存已清除")
 
 
 def _parse_csesidx_from_url(url: str) -> Optional[str]:
