@@ -384,19 +384,33 @@ def _get_jwt_via_api(config: Optional[dict] = None) -> dict:
     if proxy:
         client_kwargs["proxy"] = proxy
 
+    headers = {
+        "accept": "*/*",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "cookie": cookie_str,
+    }
+
     with httpx.Client(**client_kwargs) as client:
-        resp = client.get(
-            url,
-            headers={
-                "accept": "*/*",
-                "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "cookie": cookie_str,
-            },
-        )
+        resp = client.get(url, headers=headers)
+
+        # 处理 302 重定向到 refreshcookies
+        if resp.status_code == 302:
+            location = resp.headers.get("location", "")
+            if "refreshcookies" in location:
+                logger.info("检测到 refreshcookies 重定向，尝试跟随...")
+                # 跟随重定向刷新 Cookie
+                resp2 = client.get(location, headers=headers, follow_redirects=True)
+                if resp2.status_code == 200:
+                    # 刷新成功，重新请求 getoxsrf
+                    logger.info("Cookie 刷新成功，重新请求 getoxsrf")
+                    resp = client.get(url, headers=headers)
+                else:
+                    logger.warning(f"refreshcookies 请求失败: HTTP {resp2.status_code}")
 
     # 检查 HTTP 状态码
     if resp.status_code != 200:
-        raise ValueError(f"getoxsrf 请求失败: HTTP {resp.status_code}, 响应: {resp.text[:500]}")
+        location = resp.headers.get("location", "")
+        raise ValueError(f"getoxsrf 请求失败: HTTP {resp.status_code}, location: {location}")
 
     text = resp.text
     if text.startswith(")]}'"):
