@@ -279,14 +279,13 @@ class BrowserKeepAliveService:
                 "httpOnly": True,
             })
 
-        # __Host- 前缀的 Cookie 不能设置 domain，必须用 url
+        # __Host- 前缀的 Cookie 不能设置 domain，使用 url（不能同时设置 path）
         host_c_oses = config.get("host_c_oses")
         if host_c_oses:
             cookies.append({
                 "name": "__Host-C_OSES",
                 "value": host_c_oses,
                 "url": "https://business.gemini.google/",
-                "path": "/",
                 "secure": True,
                 "httpOnly": True,
             })
@@ -621,14 +620,13 @@ async def try_refresh_cookie_via_browser(headless: bool = True) -> dict:
                 "httpOnly": True,
             })
 
-        # __Host- 前缀的 Cookie 不能设置 domain，必须用 url
+        # __Host- 前缀的 Cookie 不能设置 domain，使用 url（不能同时设置 path）
         host_c_oses = config.get("host_c_oses")
         if host_c_oses:
             cookies.append({
                 "name": "__Host-C_OSES",
                 "value": host_c_oses,
                 "url": "https://business.gemini.google/",
-                "path": "/",
                 "secure": True,
                 "httpOnly": True,
             })
