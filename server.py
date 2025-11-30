@@ -2068,6 +2068,56 @@ async def mark_cookie_valid_endpoint() -> dict:
     return {"success": True, "message": "Cookie 已标记为有效"}
 
 
+@app.get("/api/debug/getoxsrf")
+async def debug_getoxsrf() -> dict:
+    """调试端点：测试 getoxsrf 接口"""
+    import httpx
+    from biz_gemini.auth import GETOXSRF_URL, _build_cookie_header
+
+    config = load_config()
+    csesidx = config.get("csesidx")
+
+    if not csesidx:
+        return {"error": "缺少 csesidx"}
+
+    cookie_str, cookie_debug = _build_cookie_header(config)
+    url = f"{GETOXSRF_URL}?csesidx={csesidx}"
+    proxy = get_proxy(config)
+
+    try:
+        client_kwargs = {
+            "verify": False,
+            "follow_redirects": False,
+            "timeout": 30.0,
+        }
+        if proxy:
+            client_kwargs["proxy"] = proxy
+
+        with httpx.Client(**client_kwargs) as client:
+            resp = client.get(
+                url,
+                headers={
+                    "accept": "*/*",
+                    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "cookie": cookie_str,
+                },
+            )
+
+        return {
+            "url": url,
+            "status_code": resp.status_code,
+            "headers": dict(resp.headers),
+            "response_preview": resp.text[:500] if resp.text else "",
+            "cookie_debug": cookie_debug,
+            "proxy_used": proxy,
+        }
+    except Exception as e:
+        return {
+            "error": str(e),
+            "cookie_debug": cookie_debug,
+        }
+
+
 # ==================== 版本管理 ====================
 
 @app.get("/api/version")
