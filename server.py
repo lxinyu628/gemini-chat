@@ -317,7 +317,14 @@ async def get_status() -> dict:
 
 @app.get("/api/debug/session-status")
 async def debug_session_status() -> dict:
-    """调试端点：查看 list-sessions 原始返回"""
+    """调试端点：查看 list-sessions 原始返回
+
+    返回信息包括：
+    - cookie_lengths: 各 cookie 的长度，帮助确认 cookie 是否完整
+    - cookies_saved_at: cookie 保存时间
+    - cookie_profile_dir: cookie 来源的浏览器用户数据目录（如果有）
+    - 多账号检测提示
+    """
     import httpx
 
     config = load_config()
@@ -326,8 +333,24 @@ async def debug_session_status() -> dict:
     nid = config.get("nid")
     csesidx = config.get("csesidx")
 
+    # Cookie 长度信息（帮助确认 cookie 是否完整）
+    cookie_lengths = {
+        "secure_c_ses_len": len(secure_c_ses) if secure_c_ses else 0,
+        "host_c_oses_len": len(host_c_oses) if host_c_oses else 0,
+        "nid_len": len(nid) if nid else 0,
+    }
+
+    # Cookie 保存时间和来源目录
+    cookies_saved_at = config.get("cookies_saved_at")
+    cookie_profile_dir = config.get("cookie_profile_dir")
+
     if not secure_c_ses or not csesidx:
-        return {"error": "缺少凭证"}
+        return {
+            "error": "缺少凭证",
+            "cookie_lengths": cookie_lengths,
+            "cookies_saved_at": cookies_saved_at,
+            "cookie_profile_dir": cookie_profile_dir,
+        }
 
     cookie_str = f"__Secure-C_SES={secure_c_ses}"
     if host_c_oses:
@@ -366,30 +389,54 @@ async def debug_session_status() -> dict:
         data = json.loads(text)
 
         # 检查 session 状态
-        sessions = data.get("sessions", [])
+        sessions_list = data.get("sessions", [])
         matched_session = None
         csesidx_str = str(csesidx)
-        for sess in sessions:
+        for sess in sessions_list:
             if str(sess.get("csesidx", "")) == csesidx_str:
                 matched_session = sess
                 break
 
-        return {
+        # 多账号检测
+        multi_account_warning = None
+        if len(sessions_list) > 1:
+            # 检查是否有多个不同的 csesidx
+            unique_csesidx = set(str(sess.get("csesidx", "")) for sess in sessions_list)
+            if len(unique_csesidx) > 1:
+                multi_account_warning = "检测到多账号 cookie，建议清空浏览器数据后重新登录"
+                logger.warning(f"检测到多账号 cookie: {unique_csesidx}")
+
+        result = {
             "http_status": resp.status_code,
             "proxy_used": proxy,
             "csesidx_in_config": csesidx,
             "csesidx_type": type(csesidx).__name__,
             "raw_text_preview": raw_text,
             "raw_response": data,
-            "sessions_count": len(sessions),
+            "sessions_count": len(sessions_list),
             "matched_session": matched_session,
-            "first_session_csesidx": sessions[0].get("csesidx") if sessions else None,
-            "first_session_csesidx_type": type(sessions[0].get("csesidx")).__name__ if sessions else None,
+            "first_session_csesidx": sessions_list[0].get("csesidx") if sessions_list else None,
+            "first_session_csesidx_type": type(sessions_list[0].get("csesidx")).__name__ if sessions_list else None,
             "check_result": check_session_status(config),
+            # 新增调试字段
+            "cookie_lengths": cookie_lengths,
+            "cookies_saved_at": cookies_saved_at,
+            "cookie_profile_dir": cookie_profile_dir,
         }
+
+        if multi_account_warning:
+            result["multi_account_warning"] = multi_account_warning
+
+        return result
     except Exception as e:
         import traceback
-        return {"error": str(e), "traceback": traceback.format_exc()}
+        return {
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+            "cookie_lengths": cookie_lengths,
+            "cookies_saved_at": cookies_saved_at,
+            "cookie_profile_dir": cookie_profile_dir,
+        }
 
 
 @app.post("/api/config/reload")
@@ -802,8 +849,22 @@ async def update_session_title(session_id: str, title: str) -> dict:
 
 
 @app.post("/v1/chat/completions", response_model=None)
-async def chat_completions(request: ChatRequest) -> Union[dict, StreamingResponse]:
-    """OpenAI 兼容的聊天接口"""
+async def chat_completions(
+    request: ChatRequest,
+    x_session_id: Optional[str] = Header(None, alias="X-Session-Id"),
+    conversation_id: Optional[str] = Header(None, alias="Conversation-Id"),
+) -> Union[dict, StreamingResponse]:
+    """OpenAI 兼容的聊天接口
+
+    支持通过 Header 传递会话 ID 以保持上下文（适配 ChatWebUI/Lobe Chat 等通用前端）：
+    - X-Session-Id: 优先级最高
+    - Conversation-Id: 次优先级
+    - body.session_id: 第三优先级
+    - 如果都没有，则创建新会话
+
+    通用前端可在自定义 Header 中设置 X-Session-Id 或 Conversation-Id 保持上下文，
+    否则每次请求都会创建新会话。
+    """
     try:
         config = load_config()
         missing = [k for k in ("secure_c_ses", "csesidx", "group_id") if not config.get(k)]
@@ -820,7 +881,8 @@ async def chat_completions(request: ChatRequest) -> Union[dict, StreamingRespons
     except Exception as e:
         raise HTTPException(status_code=401, detail=str(e))
 
-    session_id = request.session_id or str(uuid.uuid4())
+    # 会话 ID 优先级: X-Session-Id header > Conversation-Id header > body.session_id > 新建
+    session_id = x_session_id or conversation_id or request.session_id or str(uuid.uuid4())
     client, session_data, canonical_session_id = get_or_create_client(session_id)
 
     # 获取待发送的文件 ID

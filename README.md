@@ -144,6 +144,34 @@ curl -X POST http://localhost:8000/v1/chat/completions \
   }'
 ```
 
+#### 保持会话上下文（适配 ChatWebUI/Lobe Chat 等通用前端）
+
+通用前端可通过自定义 Header 传递会话 ID 以保持上下文，否则每次请求都会创建新会话：
+
+```bash
+# 使用 X-Session-Id header（推荐）
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "X-Session-Id: my-conversation-123" \
+  -d '{
+    "model": "business-gemini",
+    "messages": [{"role": "user", "content": "你好"}]
+  }'
+
+# 或使用 Conversation-Id header
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Conversation-Id: my-conversation-123" \
+  -d '{
+    "model": "business-gemini",
+    "messages": [{"role": "user", "content": "继续上面的话题"}]
+  }'
+```
+
+会话 ID 优先级：`X-Session-Id` header > `Conversation-Id` header > `body.session_id` > 新建会话
+
+响应中会返回 `session_id` 和 `session_name`，可用于后续请求保持上下文。
+
 ### 配置管理 API
 
 ```bash

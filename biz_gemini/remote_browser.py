@@ -2,6 +2,9 @@
 import asyncio
 import base64
 import json
+import os
+import shutil
+import tempfile
 from datetime import datetime
 from enum import Enum
 from typing import Any, Callable, Dict, Optional
@@ -13,6 +16,9 @@ from .logger import get_logger
 
 # 模块级 logger
 logger = get_logger("remote_browser")
+
+# 临时用户数据目录的基础路径
+_TEMP_PROFILE_BASE = os.path.join(tempfile.gettempdir(), "gemini_chat_browser_profiles")
 
 
 class BrowserSessionStatus(str, Enum):
@@ -28,7 +34,13 @@ class BrowserSessionStatus(str, Enum):
 class RemoteBrowserSession:
     """远程浏览器会话"""
 
-    def __init__(self, session_id: str):
+    def __init__(self, session_id: str, profile_dir: Optional[str] = None):
+        """初始化浏览器会话
+
+        Args:
+            session_id: 会话 ID
+            profile_dir: 用户数据目录路径。如果为 None，使用临时目录（每次清空）
+        """
         self.session_id = session_id
         self.status = BrowserSessionStatus.IDLE
         self.message = ""
@@ -46,6 +58,45 @@ class RemoteBrowserSession:
         self.viewport_width = 1280
         self.viewport_height = 800
 
+        # 用户数据目录策略
+        self._custom_profile_dir = profile_dir  # 显式指定的目录
+        self._temp_profile_dir: Optional[str] = None  # 实际使用的临时目录路径
+
+    def _prepare_profile_dir(self) -> Optional[str]:
+        """准备用户数据目录
+
+        如果显式指定了 profile_dir，则使用它；
+        否则使用临时目录，并在启动前清空以避免旧账号/旧 cookie 污染。
+
+        Returns:
+            用户数据目录路径，如果不使用持久化则返回 None
+        """
+        if self._custom_profile_dir:
+            # 显式指定的目录，直接使用（不清空）
+            logger.info(f"使用自定义用户数据目录: {self._custom_profile_dir}")
+            return self._custom_profile_dir
+
+        # 使用临时目录策略
+        self._temp_profile_dir = os.path.join(_TEMP_PROFILE_BASE, f"session_{self.session_id}")
+
+        # 清空现有目录（避免旧账号/旧 cookie 污染）
+        if os.path.exists(self._temp_profile_dir):
+            logger.info(f"清空临时用户数据目录: {self._temp_profile_dir}")
+            try:
+                shutil.rmtree(self._temp_profile_dir)
+            except Exception as e:
+                logger.warning(f"清空临时目录失败: {e}")
+
+        # 创建新目录
+        os.makedirs(self._temp_profile_dir, exist_ok=True)
+        logger.info(f"使用临时用户数据目录: {self._temp_profile_dir}")
+
+        return self._temp_profile_dir
+
+    def get_profile_dir(self) -> Optional[str]:
+        """获取当前使用的用户数据目录路径"""
+        return self._custom_profile_dir or self._temp_profile_dir
+
     async def start(self) -> bool:
         """启动浏览器"""
         # 防止重复启动
@@ -57,6 +108,9 @@ class RemoteBrowserSession:
             self.status = BrowserSessionStatus.STARTING
             self.message = "正在启动浏览器..."
             await self._notify_status()
+
+            # 准备用户数据目录（清空临时目录以保证干净环境）
+            profile_dir = self._prepare_profile_dir()
 
             # 获取代理配置
             config = load_config()
@@ -74,6 +128,8 @@ class RemoteBrowserSession:
             self._playwright = await async_playwright().start()
 
             # 启动 Chromium（headless 模式）
+            # 注意：使用 launch_persistent_context 可以持久化用户数据，但这里我们使用临时目录
+            # 每次登录都是干净环境
             self._browser = await self._playwright.chromium.launch(
                 headless=True,
                 args=[
@@ -229,6 +285,9 @@ class RemoteBrowserSession:
                     nid = cookie["value"]
 
             if secure_c_ses and csesidx and group_id:
+                # 获取当前使用的用户数据目录
+                profile_dir = self.get_profile_dir()
+
                 self._login_config = {
                     "secure_c_ses": secure_c_ses,
                     "host_c_oses": host_c_oses,
@@ -236,7 +295,14 @@ class RemoteBrowserSession:
                     "csesidx": csesidx,
                     "group_id": group_id,
                     "cookies_saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "cookie_profile_dir": profile_dir,  # 记录 cookie 来源目录
                 }
+
+                # 日志记录 cookie 保存信息
+                logger.info(f"登录成功，保存 cookies: csesidx={csesidx}, profile_dir={profile_dir}")
+                logger.debug(f"Cookie 长度: secure_c_ses={len(secure_c_ses) if secure_c_ses else 0}, "
+                           f"host_c_oses={len(host_c_oses) if host_c_oses else 0}, "
+                           f"nid={len(nid) if nid else 0}")
 
                 self.status = BrowserSessionStatus.LOGIN_SUCCESS
                 self.message = "登录成功！凭证已获取"
