@@ -1361,33 +1361,84 @@ async function logout() {
     }
 }
 
+// 显示账号操作菜单
+function showAccountMenu() {
+    return new Promise((resolve) => {
+        const overlay = document.createElement('div');
+        overlay.className = 'confirm-overlay';
+
+        const dialog = document.createElement('div');
+        dialog.className = 'confirm-dialog confirm-info';
+
+        dialog.innerHTML = `
+            <div class="confirm-header">
+                <div class="confirm-icon">${ToastIcons.info}</div>
+                <div class="confirm-title">当前账号</div>
+            </div>
+            <div class="confirm-body">
+                <div class="confirm-message">${escapeHtml(state.currentUsername || '未知用户')}</div>
+            </div>
+            <div class="confirm-footer" style="flex-direction: column; gap: 8px;">
+                <button class="btn btn-secondary account-menu-btn" data-action="relogin" style="width: 100%;">重新登录</button>
+                <button class="btn btn-secondary account-menu-btn" data-action="logout" style="width: 100%; color: var(--error-color);">退出登录</button>
+                <button class="btn btn-secondary account-menu-btn" data-action="close" style="width: 100%;">关闭</button>
+            </div>
+        `;
+
+        overlay.appendChild(dialog);
+        document.body.appendChild(overlay);
+
+        requestAnimationFrame(() => {
+            overlay.classList.add('show');
+        });
+
+        const close = (result) => {
+            overlay.classList.remove('show');
+            setTimeout(() => {
+                document.body.removeChild(overlay);
+                resolve(result);
+            }, 200);
+        };
+
+        // 按钮点击事件
+        dialog.querySelectorAll('.account-menu-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                close(btn.dataset.action);
+            });
+        });
+
+        // 点击遮罩关闭
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) {
+                close('close');
+            }
+        });
+
+        // ESC 键关闭
+        const handleKeydown = (e) => {
+            if (e.key === 'Escape') {
+                close('close');
+                document.removeEventListener('keydown', handleKeydown);
+            }
+        };
+        document.addEventListener('keydown', handleKeydown);
+    });
+}
+
 // 状态指示器点击显示菜单
 document.getElementById('statusIndicator').addEventListener('click', async (e) => {
     e.stopPropagation();
 
     // 如果已登录，显示选项菜单
     if (state.currentUsername) {
-        const options = [
-            { label: '重新登录', description: '使用新账号登录或刷新凭证' },
-            { label: '退出登录', description: '清除登录状态' },
-        ];
+        const action = await showAccountMenu();
 
-        // 使用简单的确认对话框让用户选择
-        const action = await toast.confirm({
-            title: `当前账号: ${state.currentUsername}`,
-            message: '请选择操作',
-            confirmText: '退出登录',
-            cancelText: '重新登录',
-            type: 'info'
-        });
-
-        if (action === true) {
-            // 点击了"退出登录"
+        if (action === 'logout') {
             logout();
-        } else if (action === false) {
-            // 点击了"重新登录"
+        } else if (action === 'relogin') {
             openLoginModal();
         }
+        // action === 'close' 时不做任何操作
     } else {
         // 未登录，直接打开登录模态框
         openLoginModal();
