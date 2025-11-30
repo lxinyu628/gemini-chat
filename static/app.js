@@ -1114,13 +1114,23 @@ function createThinkingBlock(thinking, isActive = false) {
   text.className = 'thinking-text';
   text.textContent = thinking;
 
+  // 添加斜体提示文字
+  const hint = document.createElement('div');
+  hint.className = 'thinking-hint';
+  hint.innerHTML = '<em>思考详情目前仅支持英语。</em>';
+
   content.appendChild(text);
+  content.appendChild(hint);
   block.appendChild(header);
   block.appendChild(content);
 
-  // 点击展开/收起
+  // 点击展开/收起，并切换标题文字
   header.addEventListener('click', () => {
     block.classList.toggle('expanded');
+    const titleSpan = header.querySelector('.thinking-title');
+    if (!isActive && titleSpan) {
+      titleSpan.textContent = block.classList.contains('expanded') ? '隐藏思考过程' : '显示思考过程';
+    }
   });
 
   return block;

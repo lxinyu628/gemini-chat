@@ -400,7 +400,7 @@ body {
 }
 
 .message-content {
-  max-width: 720px;
+  max-width: 82%;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -853,8 +853,13 @@ body {
 }
 
 @keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .thinking-title {
@@ -873,8 +878,13 @@ body {
 }
 
 @keyframes shimmer {
-  0% { background-position: 100% 0; }
-  100% { background-position: -100% 0; }
+  0% {
+    background-position: 100% 0;
+  }
+
+  100% {
+    background-position: -100% 0;
+  }
 }
 
 .thinking-chevron {
@@ -905,10 +915,17 @@ body {
   line-height: 1.6;
   color: var(--text-secondary);
   background-color: var(--bg-secondary);
-  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
   margin-top: -4px;
   white-space: pre-wrap;
   word-wrap: break-word;
+}
+
+.thinking-hint {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  background-color: var(--bg-secondary);
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
 }
 
 /* 思考中指示器 */
