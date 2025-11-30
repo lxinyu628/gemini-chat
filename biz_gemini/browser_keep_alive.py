@@ -266,25 +266,26 @@ class BrowserKeepAliveService:
             return
 
         cookies = []
-        domain = ".business.gemini.google"
 
+        # __Secure- 前缀的 Cookie 可以设置 domain
         secure_c_ses = config.get("secure_c_ses")
         if secure_c_ses:
             cookies.append({
                 "name": "__Secure-C_SES",
                 "value": secure_c_ses,
-                "domain": domain,
+                "domain": "business.gemini.google",
                 "path": "/",
                 "secure": True,
                 "httpOnly": True,
             })
 
+        # __Host- 前缀的 Cookie 不能设置 domain，必须用 url
         host_c_oses = config.get("host_c_oses")
         if host_c_oses:
             cookies.append({
                 "name": "__Host-C_OSES",
                 "value": host_c_oses,
-                "domain": domain,
+                "url": "https://business.gemini.google/",
                 "path": "/",
                 "secure": True,
                 "httpOnly": True,
@@ -608,25 +609,25 @@ async def try_refresh_cookie_via_browser(headless: bool = True) -> dict:
 
         # 设置现有 Cookie
         cookies = []
-        domain = ".business.gemini.google"
 
         secure_c_ses = config.get("secure_c_ses")
         if secure_c_ses:
             cookies.append({
                 "name": "__Secure-C_SES",
                 "value": secure_c_ses,
-                "domain": domain,
+                "domain": "business.gemini.google",
                 "path": "/",
                 "secure": True,
                 "httpOnly": True,
             })
 
+        # __Host- 前缀的 Cookie 不能设置 domain，必须用 url
         host_c_oses = config.get("host_c_oses")
         if host_c_oses:
             cookies.append({
                 "name": "__Host-C_OSES",
                 "value": host_c_oses,
-                "domain": domain,
+                "url": "https://business.gemini.google/",
                 "path": "/",
                 "secure": True,
                 "httpOnly": True,
