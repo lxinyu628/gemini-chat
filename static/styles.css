@@ -916,7 +916,6 @@ body {
   color: var(--text-secondary);
   background-color: var(--bg-secondary);
   margin-top: -4px;
-  white-space: pre-wrap;
   word-wrap: break-word;
 }
 
