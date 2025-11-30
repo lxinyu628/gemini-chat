@@ -816,9 +816,19 @@ async function loadConversation(sessionId, sessionName = null) {
     elements.messagesContainer.innerHTML = '';
     elements.welcomeScreen.style.display = 'none';
 
-    if (data.messages && data.messages.length > 0) {
-      data.messages.forEach(msg => {
-        appendMessage(msg.role, msg.content, msg.images);
+    // API 返回的可能是数组或 { messages: [...] }
+    const messages = Array.isArray(data) ? data : (data.messages || []);
+
+    if (messages.length > 0) {
+      messages.forEach(msg => {
+        // 处理思考链
+        let thinking = null;
+        if (msg.thoughts && Array.isArray(msg.thoughts)) {
+          thinking = msg.thoughts.join('\n');
+        } else if (msg.thinking) {
+          thinking = msg.thinking;
+        }
+        appendMessage(msg.role, msg.content, msg.images, thinking);
       });
     } else {
       elements.welcomeScreen.style.display = 'flex';
@@ -1058,8 +1068,12 @@ async function sendMessage() {
 
     // 获取思考链内容（如果有）
     let thinkingContent = null;
-    if (data.choices[0].message.thinking) {
-      thinkingContent = data.choices[0].message.thinking;
+    const message = data.choices[0].message;
+    if (message.thoughts && Array.isArray(message.thoughts)) {
+      // thoughts 是数组，合并为字符串
+      thinkingContent = message.thoughts.join('\n');
+    } else if (message.thinking) {
+      thinkingContent = message.thinking;
     } else if (data.thinking) {
       thinkingContent = data.thinking;
     }
@@ -1089,7 +1103,7 @@ function createThinkingBlock(thinking, isActive = false) {
   header.className = 'thinking-header';
   header.innerHTML = `
     <i data-lucide="sparkles" class="thinking-icon${isActive ? ' spinning' : ''}"></i>
-    <span class="thinking-title${isActive ? ' thinking-active' : ''}">${isActive ? '正在思考...' : '已深入思考'}</span>
+    <span class="thinking-title${isActive ? ' thinking-active' : ''}">${isActive ? '正在思考...' : '显示思考过程'}</span>
     <i data-lucide="chevron-down" class="thinking-chevron"></i>
   `;
 
