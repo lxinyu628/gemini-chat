@@ -9,6 +9,46 @@ const state = {
   statusCheckInterval: null
 };
 
+// ==================== Lucide 图标自动渲染 ====================
+
+// 使用 MutationObserver 监听 DOM 变化，自动渲染新添加的 Lucide 图标
+(function initLucideObserver() {
+  if (typeof lucide === 'undefined') return;
+
+  // 防抖：避免频繁调用
+  let pending = false;
+  const renderIcons = () => {
+    if (pending) return;
+    pending = true;
+    requestAnimationFrame(() => {
+      lucide.createIcons();
+      pending = false;
+    });
+  };
+
+  // 监听 DOM 变化
+  const observer = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      if (mutation.type === 'childList' && mutation.addedNodes.length > 0) {
+        // 检查是否有新增的 lucide 图标元素
+        for (const node of mutation.addedNodes) {
+          if (node.nodeType === Node.ELEMENT_NODE) {
+            if (node.hasAttribute?.('data-lucide') || node.querySelector?.('[data-lucide]')) {
+              renderIcons();
+              return;
+            }
+          }
+        }
+      }
+    }
+  });
+
+  observer.observe(document.body, {
+    childList: true,
+    subtree: true
+  });
+})();
+
 // ==================== Toast 通知系统 ====================
 
 const ToastIcons = {
@@ -68,7 +108,6 @@ function showToast(options) {
   }
 
   container.appendChild(toast);
-  lucide.createIcons();
 
   // 自动关闭
   if (duration > 0) {
