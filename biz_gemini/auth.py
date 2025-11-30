@@ -91,14 +91,17 @@ def check_session_status(config: Optional[dict] = None) -> dict:
         {
             "valid": bool,          # session 是否有效
             "expired": bool,        # session 是否已过期
+            "warning": bool,        # 是否有警告（如 Cookie 无效但不一定过期）
             "username": str,        # 用户名/邮箱
             "error": str | None,    # 错误信息
+            "raw_response": dict,   # 原始响应（用于调试）
         }
     """
     if config is None:
         config = load_config()
 
     secure_c_ses = config.get("secure_c_ses")
+    host_c_oses = config.get("host_c_oses")  # 新增：读取 __Host-C_OSES
     csesidx = config.get("csesidx")
     nid = config.get("nid")
 
@@ -106,14 +109,18 @@ def check_session_status(config: Optional[dict] = None) -> dict:
         return {
             "valid": False,
             "expired": True,
+            "warning": False,
             "username": None,
             "error": "缺少凭证信息",
+            "raw_response": None,
         }
 
     proxy = get_proxy(config)
 
-    # 使用 __Secure-C_SES 和 NID
+    # 构造 Cookie 字符串，保持和浏览器一致
     cookie_str = f"__Secure-C_SES={secure_c_ses}"
+    if host_c_oses:
+        cookie_str += f"; __Host-C_OSES={host_c_oses}"
     if nid:
         cookie_str += f"; NID={nid}"
 
@@ -143,8 +150,32 @@ def check_session_status(config: Optional[dict] = None) -> dict:
                 },
             )
 
-        # 如果 list-sessions 返回 401，尝试用 getoxsrf 验证
+        # 如果 list-sessions 返回 401，检查响应内容
         if resp.status_code == 401:
+            # 尝试解析响应内容，检查是否是 INVALID_COOKIES
+            raw_response = None
+            try:
+                text = resp.text
+                if text.startswith(")]}'"):
+                    text = text[4:].strip()
+                raw_response = json.loads(text) if text else {}
+            except Exception:
+                raw_response = {"raw_text": resp.text[:500]}
+
+            # 检查是否是 INVALID_COOKIES 状态
+            status = raw_response.get("status") if isinstance(raw_response, dict) else None
+            if status == "INVALID_COOKIES":
+                # Cookies 无效/缺少 __Host-C_OSES，返回 warning 而不是 expired
+                missing_cookie_hint = "缺少 __Host-C_OSES" if not host_c_oses else "Cookies 无效"
+                return {
+                    "valid": False,
+                    "expired": False,  # 不强行认为过期
+                    "warning": True,
+                    "username": None,
+                    "error": f"Cookies 无效或缺失 ({missing_cookie_hint})",
+                    "raw_response": raw_response,
+                }
+
             # 尝试通过 getoxsrf 验证 session 是否有效
             try:
                 _get_jwt_via_api(config)
@@ -152,23 +183,29 @@ def check_session_status(config: Optional[dict] = None) -> dict:
                 return {
                     "valid": True,
                     "expired": False,
+                    "warning": False,
                     "username": None,
                     "error": None,
+                    "raw_response": raw_response,
                 }
             except Exception:
                 return {
                     "valid": False,
                     "expired": True,
+                    "warning": False,
                     "username": None,
                     "error": "HTTP 401",
+                    "raw_response": raw_response,
                 }
 
         if resp.status_code != 200:
             return {
                 "valid": False,
                 "expired": True,
+                "warning": False,
                 "username": None,
                 "error": f"HTTP {resp.status_code}",
+                "raw_response": None,
             }
 
         text = resp.text
@@ -196,30 +233,38 @@ def check_session_status(config: Optional[dict] = None) -> dict:
             return {
                 "valid": not is_expired,
                 "expired": is_expired,
+                "warning": False,
                 "username": current_session.get("subject") or current_session.get("displayName"),
                 "error": None,
+                "raw_response": data,
             }
 
         return {
             "valid": False,
             "expired": True,
+            "warning": False,
             "username": None,
             "error": "未找到 session 信息",
+            "raw_response": data,
         }
 
     except json.JSONDecodeError as e:
         return {
             "valid": False,
             "expired": True,
+            "warning": False,
             "username": None,
             "error": f"JSON 解析失败: {e}",
+            "raw_response": None,
         }
     except Exception as e:
         return {
             "valid": False,
             "expired": True,
+            "warning": False,
             "username": None,
             "error": str(e),
+            "raw_response": None,
         }
 
 

@@ -647,6 +647,7 @@ async function createNewConversation() {
         const data = await response.json();
 
         state.currentConversationId = data.session_id;
+        state.currentSessionName = data.session_name || null;  // 保存完整 session name
         elements.messagesContainer.innerHTML = '';
         elements.welcomeScreen.style.display = 'flex';
         elements.messageInput.value = '';
@@ -865,6 +866,16 @@ async function sendMessage() {
         }
 
         const data = await response.json();
+
+        // 用响应中的 canonical session_id/session_name 更新 state（避免刷新后 ID 不匹配）
+        if (data.session_id && data.session_id !== state.currentConversationId) {
+            console.log('[DEBUG] 更新 session_id:', state.currentConversationId, '->', data.session_id);
+            state.currentConversationId = data.session_id;
+        }
+        if (data.session_name) {
+            state.currentSessionName = data.session_name;
+        }
+
         const rawContent = data.choices[0].message.content;
 
         // 处理 content 可能是数组或字符串的情况

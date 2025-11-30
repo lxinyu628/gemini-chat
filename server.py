@@ -139,24 +139,51 @@ class SessionInfo(BaseModel):
     message_count: int
 
 
-def get_or_create_client(session_id: str) -> tuple[OpenAICompatClient, dict]:
-    """获取或创建指定会话的客户端"""
-    if session_id not in sessions:
-        config = load_config()
-        jwt_manager = JWTManager(config=config)
-        biz_client = BizGeminiClient(config, jwt_manager)
-        client = OpenAICompatClient(biz_client)
-        # 创建 Gemini 会话并获取 session_name
-        session_name = biz_client.session_name
-        sessions[session_id] = {
-            "client": client,
-            "biz_client": biz_client,
-            "session_name": session_name,
-            "messages": [],
-            "title": "新对话",
-            "created_at": time.time(),
-        }
-    return sessions[session_id]["client"], sessions[session_id]
+def get_or_create_client(session_id: str) -> tuple[OpenAICompatClient, dict, str]:
+    """获取或创建指定会话的客户端
+
+    Returns:
+        (client, session_data, canonical_session_id) 元组
+        canonical_session_id 是真实的 Google session ID（可能与传入的 session_id 不同）
+    """
+    # 如果 session_id 已存在，直接返回
+    if session_id in sessions:
+        return sessions[session_id]["client"], sessions[session_id], session_id
+
+    # 检查是否有其他会话的 session_name 以此 session_id 结尾（用于 UUID 迁移场景）
+    # 这种情况不太可能发生，但保留兼容性
+
+    # 创建新会话
+    config = load_config()
+    jwt_manager = JWTManager(config=config)
+    biz_client = BizGeminiClient(config, jwt_manager)
+    client = OpenAICompatClient(biz_client)
+    # 创建 Gemini 会话并获取 session_name
+    session_name = biz_client.session_name
+
+    # 从 session_name 提取真实的 session_id
+    real_session_id = session_name.split("/")[-1] if "/" in session_name else session_name
+
+    # 判断传入的 session_id 是否是临时 UUID（格式：xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx）
+    is_temp_uuid = len(session_id) == 36 and session_id.count("-") == 4
+
+    if is_temp_uuid and real_session_id != session_id:
+        # 传入的是临时 UUID，需要迁移到真实 session_id
+        logger.debug(f"会话 ID 迁移: {session_id} -> {real_session_id}")
+        canonical_id = real_session_id
+    else:
+        canonical_id = session_id
+
+    sessions[canonical_id] = {
+        "client": client,
+        "biz_client": biz_client,
+        "session_name": session_name,
+        "messages": [],
+        "title": "新对话",
+        "created_at": time.time(),
+    }
+
+    return sessions[canonical_id]["client"], sessions[canonical_id], canonical_id
 
 
 def get_or_create_anthropic_client(session_id: str = "default") -> tuple[AnthropicCompatClient, dict]:
@@ -240,12 +267,27 @@ async def get_status() -> dict:
         # 如果保活服务还没有检查过，主动检查一次
         session_status = check_session_status(config)
 
+        # 处理 warning 状态（如 Cookies 无效/缺少 __Host-C_OSES）
+        if session_status.get("warning", False):
+            return {
+                "logged_in": True,  # 可能仍然可用，只是状态检查有问题
+                "warning": True,
+                "message": session_status.get("error", "登录状态异常"),
+                "debug": {
+                    "error": session_status.get("error"),
+                    "raw_response": session_status.get("raw_response"),
+                },
+            }
+
         if session_status.get("expired", False):
             return {
                 "logged_in": False,
                 "expired": True,
                 "message": "登录已过期，请重新运行 python app.py login",
-                "debug": session_status,  # 添加调试信息
+                "debug": {
+                    "error": session_status.get("error"),
+                    "raw_response": session_status.get("raw_response"),
+                },
             }
 
         if session_status.get("error"):
@@ -253,7 +295,10 @@ async def get_status() -> dict:
                 "logged_in": True,
                 "warning": True,
                 "message": f"检查状态失败: {session_status['error']}",
-                "debug": session_status,  # 添加调试信息
+                "debug": {
+                    "error": session_status.get("error"),
+                    "raw_response": session_status.get("raw_response"),
+                },
             }
 
         return {
@@ -513,9 +558,45 @@ async def list_sessions() -> list:
 
 @app.post("/api/sessions")
 async def create_session() -> dict:
-    """创建新会话"""
-    session_id = str(uuid.uuid4())
-    return {"session_id": session_id}
+    """创建新会话 - 直接创建 Google 会话并返回真实 session_id"""
+    try:
+        config = load_config()
+        missing = [k for k in ("secure_c_ses", "csesidx", "group_id") if not config.get(k)]
+        if missing:
+            # 未登录时返回临时 UUID（后续首次发消息时会创建真实会话）
+            temp_id = str(uuid.uuid4())
+            return {"session_id": temp_id, "is_temp": True}
+
+        # 创建 BizGeminiClient 并获取真实的 Google session
+        jwt_manager = JWTManager(config=config)
+        biz_client = BizGeminiClient(config, jwt_manager)
+        # 触发会话创建
+        session_name = biz_client.session_name
+        # 从 session_name 提取真实的 session_id（name 最后一段）
+        # 格式: collections/default_collection/engines/agentspace-engine/sessions/11281810546812518810
+        real_session_id = session_name.split("/")[-1] if "/" in session_name else session_name
+
+        # 预先存储到 sessions 字典
+        client = OpenAICompatClient(biz_client)
+        sessions[real_session_id] = {
+            "client": client,
+            "biz_client": biz_client,
+            "session_name": session_name,
+            "messages": [],
+            "title": "新对话",
+            "created_at": time.time(),
+        }
+
+        logger.debug(f"创建新会话: session_id={real_session_id}, session_name={session_name}")
+        return {
+            "session_id": real_session_id,
+            "session_name": session_name,
+            "is_temp": False,
+        }
+    except Exception as e:
+        logger.warning(f"创建 Google 会话失败，使用临时 UUID: {e}")
+        temp_id = str(uuid.uuid4())
+        return {"session_id": temp_id, "is_temp": True}
 
 
 @app.delete("/api/sessions/{session_id:path}")
@@ -740,11 +821,11 @@ async def chat_completions(request: ChatRequest) -> Union[dict, StreamingRespons
         raise HTTPException(status_code=401, detail=str(e))
 
     session_id = request.session_id or str(uuid.uuid4())
-    client, session_data = get_or_create_client(session_id)
+    client, session_data, canonical_session_id = get_or_create_client(session_id)
 
     # 获取待发送的文件 ID
     pending_file_ids = session_data.get("pending_file_ids", [])
-    logger.debug(f"聊天请求: session_id={session_id}, session_name={session_data.get('session_name')}, pending_file_ids={pending_file_ids}")
+    logger.debug(f"聊天请求: session_id={session_id}, canonical_session_id={canonical_session_id}, session_name={session_data.get('session_name')}, pending_file_ids={pending_file_ids}")
 
     # 保存用户消息
     user_message = request.messages[-1] if request.messages else None
@@ -856,7 +937,9 @@ async def chat_completions(request: ChatRequest) -> Union[dict, StreamingRespons
             if "thoughts" in response:
                 msg_data["thoughts"] = response["thoughts"]
             session_data["messages"].append(msg_data)
-            response["session_id"] = session_id
+            # 返回 canonical session_id 和 session_name，供前端更新状态
+            response["session_id"] = canonical_session_id
+            response["session_name"] = session_data.get("session_name")
             return response
         except Exception as e:
             import traceback
@@ -1020,10 +1103,10 @@ async def upload_file(
 
         # 获取客户端
         if session_id:
-            _, session_data = get_or_create_client(session_id)
+            _, session_data, canonical_session_id = get_or_create_client(session_id)
             biz_client = session_data["biz_client"]
             session_name = session_data["session_name"]
-            logger.debug(f"使用 OpenAI 会话: session_id={session_id}, session_name={session_name}")
+            logger.debug(f"使用 OpenAI 会话: session_id={session_id}, canonical_session_id={canonical_session_id}, session_name={session_name}")
         else:
             # 使用 Anthropic 默认会话
             _, session_data = get_or_create_anthropic_client("default")
