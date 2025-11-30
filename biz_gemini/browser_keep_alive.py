@@ -606,47 +606,67 @@ async def try_refresh_cookie_via_browser(headless: bool = True) -> dict:
             window.chrome = { runtime: {}, loadTimes: function() {}, csi: function() {}, app: {} };
         """)
 
-        # 设置现有 Cookie
-        cookies = []
-
-        secure_c_ses = config.get("secure_c_ses")
-        if secure_c_ses:
-            cookies.append({
-                "name": "__Secure-C_SES",
-                "value": secure_c_ses,
-                "domain": "business.gemini.google",
-                "path": "/",
-                "secure": True,
-                "httpOnly": True,
-            })
-
-        # __Host- 前缀的 Cookie 不能设置 domain，使用 url（不能同时设置 path）
-        host_c_oses = config.get("host_c_oses")
-        if host_c_oses:
-            cookies.append({
-                "name": "__Host-C_OSES",
-                "value": host_c_oses,
-                "url": "https://business.gemini.google/",
-                "secure": True,
-                "httpOnly": True,
-            })
-
-        if cookies:
-            await context.add_cookies(cookies)
-
+        # 先访问目标页面，让浏览器建立域名上下文
         page = await context.new_page()
 
         try:
+            # 第一步：先访问页面（可能会重定向到登录页）
+            logger.info("正在访问目标页面...")
+            await page.goto(TARGET_URL, timeout=60000, wait_until="domcontentloaded")
+
+            # 第二步：设置 Cookie（在正确的域名上下文中）
+            cookies = []
+
+            secure_c_ses = config.get("secure_c_ses")
+            if secure_c_ses:
+                cookies.append({
+                    "name": "__Secure-C_SES",
+                    "value": secure_c_ses,
+                    "domain": "business.gemini.google",
+                    "path": "/",
+                    "secure": True,
+                    "httpOnly": True,
+                })
+
+            host_c_oses = config.get("host_c_oses")
+            if host_c_oses:
+                cookies.append({
+                    "name": "__Host-C_OSES",
+                    "value": host_c_oses,
+                    "domain": "business.gemini.google",
+                    "path": "/",
+                    "secure": True,
+                    "httpOnly": True,
+                })
+
+            nid = config.get("nid")
+            if nid:
+                cookies.append({
+                    "name": "NID",
+                    "value": nid,
+                    "domain": ".google.com",
+                    "path": "/",
+                    "secure": True,
+                    "httpOnly": True,
+                })
+
+            if cookies:
+                await context.add_cookies(cookies)
+                logger.info(f"已设置 {len(cookies)} 个 Cookie")
+
+            # 第三步：重新访问目标页面（带上 Cookie）
+            logger.info("重新访问目标页面...")
             await page.goto(TARGET_URL, timeout=60000)
             await page.wait_for_load_state("networkidle", timeout=30000)
 
             current_url = page.url
+            logger.info(f"当前 URL: {current_url}")
 
             # 检查是否在登录页
             is_login_page = any(host in current_url for host in LOGIN_HOSTS)
 
             if is_login_page:
-                logger.warning("Cookie 已失效，需要手动登录")
+                logger.warning(f"被重定向到登录页: {current_url}")
                 return {
                     "success": False,
                     "message": "Cookie 已失效，需要手动登录",
