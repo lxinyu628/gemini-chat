@@ -506,6 +506,10 @@ async function checkStatus() {
 
         elements.statusIndicator.className = 'status-indicator';
 
+        // 保存 signout_url 到全局状态
+        state.signoutUrl = data.signout_url || null;
+        state.currentUsername = data.username || null;
+
         // 仅在 expired 或 logged_in=false 时弹过期模态框
         // warning=true 时只提示状态异常，不弹模态
         if (data.expired || data.logged_in === false) {
@@ -524,7 +528,7 @@ async function checkStatus() {
             elements.statusIndicator.classList.add('online');
             // 显示用户名或简单的"已登录"状态
             if (data.username) {
-                statusText.textContent = data.username;
+                statusText.textContent = `已登录: ${data.username}`;
             } else {
                 statusText.textContent = '已登录';
             }
@@ -1324,9 +1328,70 @@ async function saveManualConfig() {
     }
 }
 
-// 状态指示器点击打开登录
-document.getElementById('statusIndicator').addEventListener('click', () => {
-    openLoginModal();
+// 退出登录
+async function logout() {
+    const confirmed = await toast.confirm({
+        title: '退出登录',
+        message: '确定要退出登录吗？退出后需要重新登录才能使用。',
+        confirmText: '退出',
+        cancelText: '取消',
+        type: 'warning'
+    });
+
+    if (!confirmed) {
+        return;
+    }
+
+    try {
+        const response = await fetch('/api/logout', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+            toast.success('已退出登录，页面将在 2 秒后刷新。');
+            setTimeout(() => location.reload(), 2000);
+        } else {
+            toast.error(result.error || '退出失败');
+        }
+    } catch (error) {
+        toast.error(error.message, '退出失败');
+    }
+}
+
+// 状态指示器点击显示菜单
+document.getElementById('statusIndicator').addEventListener('click', async (e) => {
+    e.stopPropagation();
+
+    // 如果已登录，显示选项菜单
+    if (state.currentUsername) {
+        const options = [
+            { label: '重新登录', description: '使用新账号登录或刷新凭证' },
+            { label: '退出登录', description: '清除登录状态' },
+        ];
+
+        // 使用简单的确认对话框让用户选择
+        const action = await toast.confirm({
+            title: `当前账号: ${state.currentUsername}`,
+            message: '请选择操作',
+            confirmText: '退出登录',
+            cancelText: '重新登录',
+            type: 'info'
+        });
+
+        if (action === true) {
+            // 点击了"退出登录"
+            logout();
+        } else if (action === false) {
+            // 点击了"重新登录"
+            openLoginModal();
+        }
+    } else {
+        // 未登录，直接打开登录模态框
+        openLoginModal();
+    }
 });
 
 // 清理

@@ -306,11 +306,14 @@ def check_session_status(config: Optional[dict] = None) -> dict:
 
         if current_session:
             is_expired = current_session.get("expired", False)
+            # 优先取 username，若为空则取 subject，最后取 displayName
+            username = current_session.get("username") or current_session.get("subject") or current_session.get("displayName")
             return {
                 "valid": not is_expired,
                 "expired": is_expired,
                 "warning": False,
-                "username": current_session.get("subject") or current_session.get("displayName"),
+                "username": username,
+                "signout_url": current_session.get("singleSessionSignoutUrl"),
                 "error": None,
                 "raw_response": data,
                 "cookie_debug": cookie_debug,

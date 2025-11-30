@@ -309,6 +309,7 @@ async def get_status() -> dict:
             "logged_in": True,
             "session_valid": session_status.get("valid", True),
             "username": session_status.get("username"),
+            "signout_url": session_status.get("signout_url"),
             "message": f"已登录: {session_status.get('username')}" if session_status.get("username") else "已登录",
         }
 
@@ -528,6 +529,68 @@ async def cancel_login(task_id: str) -> dict:
             "success": False,
             "message": "任务不存在或无法取消",
         }
+
+
+@app.post("/api/logout")
+async def logout() -> dict:
+    """退出登录
+
+    调用 Google 的 singleSessionSignoutUrl 进行登出，
+    并清除本地配置中的 session 信息。
+    """
+    import httpx
+
+    try:
+        config = load_config()
+
+        # 先检查 session 状态获取 signout_url
+        session_status = check_session_status(config)
+        signout_url = session_status.get("signout_url")
+
+        # 清除本地 session 配置
+        clear_config = {
+            "secure_c_ses": "",
+            "host_c_oses": "",
+            "nid": "",
+            "csesidx": "",
+            "cookie_raw": "",
+            "cookies_saved_at": "",
+        }
+        save_config(clear_config)
+
+        # 清除内存中的会话缓存
+        sessions.clear()
+        anthropic_sessions.clear()
+
+        # 如果有 signout_url，尝试调用（可选，不影响本地登出）
+        signout_called = False
+        if signout_url:
+            try:
+                proxy = get_proxy(config)
+                client_kwargs = {"verify": False, "timeout": 10.0, "follow_redirects": True}
+                if proxy:
+                    client_kwargs["proxy"] = proxy
+
+                async with httpx.AsyncClient(**client_kwargs) as client:
+                    resp = await client.get(signout_url)
+                    signout_called = resp.status_code in (200, 302, 303)
+            except Exception as e:
+                logger.warning(f"调用 signout URL 失败: {e}")
+
+        return {
+            "success": True,
+            "message": "已退出登录",
+            "signout_called": signout_called,
+            "signout_url": signout_url,
+        }
+
+    except Exception as e:
+        logger.error(f"退出登录失败: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+        }
+
 
 
 
