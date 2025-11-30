@@ -33,6 +33,11 @@ const state = {
         // 检查是否有新增的 lucide 图标元素
         for (const node of mutation.addedNodes) {
           if (node.nodeType === Node.ELEMENT_NODE) {
+            // 跳过已经渲染后的 Lucide SVG 元素，避免无限循环
+            if (node.classList?.contains('lucide') || node.querySelector?.('svg.lucide')) {
+              continue;
+            }
+            // 只处理未渲染的 data-lucide 元素
             if (node.hasAttribute?.('data-lucide') || node.querySelector?.('[data-lucide]')) {
               renderIcons();
               return;
@@ -424,11 +429,15 @@ const elements = {
   attachBtn: document.getElementById('attachBtn'),
   fileInput: document.getElementById('fileInput'),
   filePreview: document.getElementById('filePreview'),
-  modelSelect: document.getElementById('modelSelect'),
+  modelSelector: document.getElementById('modelSelector'),
+  modelName: document.getElementById('modelName'),
   themeToggle: document.getElementById('themeToggle'),
   statusIndicator: document.getElementById('statusIndicator'),
   expiredModal: document.getElementById('expiredModal')
 };
+
+// 模型列表缓存
+let modelsList = [];
 
 // 初始化
 document.addEventListener('DOMContentLoaded', () => {
@@ -459,23 +468,28 @@ function initEventListeners() {
   elements.sendBtn.addEventListener('click', sendMessage);
   elements.attachBtn.addEventListener('click', () => elements.fileInput.click());
   elements.fileInput.addEventListener('change', handleFileSelect);
-  elements.modelSelect.addEventListener('change', (e) => {
-    state.currentModel = e.target.value;
+
+  // 模型选择器点击事件
+  elements.modelSelector.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleModelDropdown();
   });
 
   // 输入框自动调整高度
   const messageInput = elements.messageInput;
-  const maxHeight = 200;
-  const lineHeight = 24; // 大约一行的高度
+  const lineHeight = 24;
+  const maxLines = 5;
+  const maxHeight = lineHeight * maxLines; // 5行高度 = 120px
 
   function autoResize() {
     // 先重置高度以获取正确的 scrollHeight
     messageInput.style.height = 'auto';
-    const newHeight = Math.min(messageInput.scrollHeight, maxHeight);
-    messageInput.style.height = newHeight + 'px';
+    const scrollHeight = messageInput.scrollHeight - 28; // 减去 padding
+    const newHeight = Math.min(scrollHeight, maxHeight);
+    messageInput.style.height = Math.max(newHeight, lineHeight) + 'px';
 
-    // 当内容超过最大高度时，显示滚动条
-    messageInput.style.overflowY = messageInput.scrollHeight > maxHeight ? 'auto' : 'hidden';
+    // 当内容超过5行时，显示滚动条
+    messageInput.style.overflowY = scrollHeight > maxHeight ? 'auto' : 'hidden';
 
     updateSendButton();
   }
@@ -581,39 +595,134 @@ async function loadModels() {
     const data = await response.json();
 
     if (data.data && data.data.length > 0) {
-      elements.modelSelect.innerHTML = '';
-      data.data.forEach(model => {
-        const option = document.createElement('option');
-        option.value = model.id;
-        // 显示名称，description 作为 title 提示
-        option.textContent = model.name || model.id;
-        if (model.description) {
-          option.title = model.description;
-        }
-        elements.modelSelect.appendChild(option);
-      });
+      modelsList = data.data.map(model => ({
+        id: model.id,
+        name: model.name || model.id,
+        description: model.description || ''
+      }));
       state.currentModel = 'auto';
+      updateModelDisplay();
     }
   } catch (error) {
     console.error('加载模型失败:', error);
     // 加载失败时使用默认模型列表
-    const defaultModels = [
-      { id: 'auto', name: '自动选择', description: 'Gemini Enterprise 会选择最合适的选项' },
+    modelsList = [
+      { id: 'auto', name: '自动', description: 'Gemini Enterprise 会选择最合适的选项' },
       { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', description: '适用于执行日常任务' },
       { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', description: '最适用于执行复杂任务' },
       { id: 'gemini-3-pro-preview', name: 'Gemini 3 Pro Preview', description: '先进的推理模型' },
     ];
-
-    elements.modelSelect.innerHTML = '';
-    defaultModels.forEach(model => {
-      const option = document.createElement('option');
-      option.value = model.id;
-      option.textContent = model.name;
-      option.title = model.description;
-      elements.modelSelect.appendChild(option);
-    });
-
     state.currentModel = 'auto';
+    updateModelDisplay();
+  }
+}
+
+// 更新模型显示名称
+function updateModelDisplay() {
+  const model = modelsList.find(m => m.id === state.currentModel);
+  if (model) {
+    elements.modelName.textContent = model.name;
+  }
+}
+
+// 模型下拉浮窗
+let modelDropdown = null;
+
+function toggleModelDropdown() {
+  if (modelDropdown) {
+    closeModelDropdown();
+  } else {
+    openModelDropdown();
+  }
+}
+
+function openModelDropdown() {
+  if (modelDropdown) return;
+
+  // 创建下拉浮窗
+  modelDropdown = document.createElement('div');
+  modelDropdown.className = 'model-dropdown';
+
+  // Gemini 图标 SVG
+  const geminiIconSvg = `<svg width="24" height="24" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <mask id="mask_dropdown_icon" style="mask-type:alpha" maskUnits="userSpaceOnUse" x="8" y="8" width="112" height="112">
+      <path d="M63.892 8C62.08 38.04 38.04 62.08 8 63.892V64.108C38.04 65.92 62.08 89.96 63.892 120H64.108C65.92 89.96 89.96 65.92 120 64.108V63.892C89.96 62.08 65.92 38.04 64.108 8H63.892Z" fill="url(#paint_dd_0)"/>
+    </mask>
+    <g mask="url(#mask_dropdown_icon)">
+      <path d="M64 0C99.3216 0 128 28.6784 128 64C128 99.3216 99.3216 128 64 128C28.6784 128 0 99.3216 0 64C0 28.6784 28.6784 0 64 0Z" fill="url(#paint_dd_1)"/>
+    </g>
+    <defs>
+      <linearGradient id="paint_dd_0" x1="100.892" y1="30.04" x2="22.152" y2="96.848" gradientUnits="userSpaceOnUse">
+        <stop stop-color="#217BFE"/><stop offset="0.14" stop-color="#1485FC"/><stop offset="0.27" stop-color="#078EFB"/><stop offset="0.52" stop-color="#548FFD"/><stop offset="0.78" stop-color="#A190FF"/><stop offset="0.89" stop-color="#AF94FE"/><stop offset="1" stop-color="#BD99FE"/>
+      </linearGradient>
+      <linearGradient id="paint_dd_1" x1="47.988" y1="82.52" x2="96.368" y2="32.456" gradientUnits="userSpaceOnUse">
+        <stop stop-color="#217BFE"/><stop offset="0.14" stop-color="#1485FC"/><stop offset="0.27" stop-color="#078EFB"/><stop offset="0.52" stop-color="#548FFD"/><stop offset="0.78" stop-color="#A190FF"/><stop offset="0.89" stop-color="#AF94FE"/><stop offset="1" stop-color="#BD99FE"/>
+      </linearGradient>
+    </defs>
+  </svg>`;
+
+  // 渲染模型列表
+  modelsList.forEach(model => {
+    const item = document.createElement('div');
+    item.className = 'model-dropdown-item' + (model.id === state.currentModel ? ' active' : '');
+    item.innerHTML = `
+      <div class="model-item-icon">${geminiIconSvg}</div>
+      <div class="model-item-info">
+        <div class="model-item-name">${escapeHtml(model.name)}</div>
+        <div class="model-item-desc">${escapeHtml(model.description)}</div>
+      </div>
+      <i data-lucide="check" class="model-item-check"></i>
+    `;
+    item.addEventListener('click', () => {
+      state.currentModel = model.id;
+      updateModelDisplay();
+      closeModelDropdown();
+    });
+    modelDropdown.appendChild(item);
+  });
+
+  document.body.appendChild(modelDropdown);
+
+  // 定位浮窗
+  const rect = elements.modelSelector.getBoundingClientRect();
+  modelDropdown.style.left = rect.left + 'px';
+  modelDropdown.style.bottom = (window.innerHeight - rect.top + 8) + 'px';
+
+  // 显示动画
+  requestAnimationFrame(() => {
+    modelDropdown.classList.add('show');
+    elements.modelSelector.classList.add('open');
+    // 渲染 lucide 图标
+    if (typeof lucide !== 'undefined') {
+      lucide.createIcons({ nodes: modelDropdown.querySelectorAll('[data-lucide]') });
+    }
+  });
+
+  // 点击外部关闭
+  setTimeout(() => {
+    document.addEventListener('click', handleDropdownOutsideClick);
+  }, 0);
+}
+
+function closeModelDropdown() {
+  if (!modelDropdown) return;
+
+  modelDropdown.classList.remove('show');
+  elements.modelSelector.classList.remove('open');
+
+  setTimeout(() => {
+    if (modelDropdown && modelDropdown.parentNode) {
+      modelDropdown.parentNode.removeChild(modelDropdown);
+    }
+    modelDropdown = null;
+  }, 200);
+
+  document.removeEventListener('click', handleDropdownOutsideClick);
+}
+
+function handleDropdownOutsideClick(e) {
+  if (modelDropdown && !modelDropdown.contains(e.target) && !elements.modelSelector.contains(e.target)) {
+    closeModelDropdown();
   }
 }
 
@@ -644,15 +753,13 @@ function renderConversations() {
     const deleteId = conv.session_name || conv.session_id;
 
     item.innerHTML = `
-            <div class="conversation-title">${escapeHtml(conv.title)}</div>
-            <div class="conversation-actions">
-                <button class="conversation-delete" data-id="${deleteId}">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-                    </svg>
-                </button>
-            </div>
-        `;
+      <div class="conversation-title">${escapeHtml(conv.title)}</div>
+      <div class="conversation-actions">
+        <button class="conversation-delete" data-id="${deleteId}">
+          <i data-lucide="trash-2"></i>
+        </button>
+      </div>
+    `;
 
     item.addEventListener('click', (e) => {
       if (!e.target.closest('.conversation-delete')) {
@@ -949,7 +1056,15 @@ async function sendMessage() {
       });
     }
 
-    appendMessage('assistant', textContent, allImages);
+    // 获取思考链内容（如果有）
+    let thinkingContent = null;
+    if (data.choices[0].message.thinking) {
+      thinkingContent = data.choices[0].message.thinking;
+    } else if (data.thinking) {
+      thinkingContent = data.thinking;
+    }
+
+    appendMessage('assistant', textContent, allImages, thinkingContent);
 
     // 更新会话列表
     await loadConversations();
@@ -965,8 +1080,40 @@ async function sendMessage() {
   }
 }
 
+// 创建思考链显示块
+function createThinkingBlock(thinking, isActive = false) {
+  const block = document.createElement('div');
+  block.className = 'thinking-block';
+
+  const header = document.createElement('div');
+  header.className = 'thinking-header';
+  header.innerHTML = `
+    <i data-lucide="sparkles" class="thinking-icon${isActive ? ' spinning' : ''}"></i>
+    <span class="thinking-title${isActive ? ' thinking-active' : ''}">${isActive ? '正在思考...' : '已深入思考'}</span>
+    <i data-lucide="chevron-down" class="thinking-chevron"></i>
+  `;
+
+  const content = document.createElement('div');
+  content.className = 'thinking-content';
+
+  const text = document.createElement('div');
+  text.className = 'thinking-text';
+  text.textContent = thinking;
+
+  content.appendChild(text);
+  block.appendChild(header);
+  block.appendChild(content);
+
+  // 点击展开/收起
+  header.addEventListener('click', () => {
+    block.classList.toggle('expanded');
+  });
+
+  return block;
+}
+
 // 消息显示
-function appendMessage(role, content, images = null) {
+function appendMessage(role, content, images = null, thinking = null) {
   const messageDiv = document.createElement('div');
   messageDiv.className = `message ${role}`;
 
@@ -976,6 +1123,12 @@ function appendMessage(role, content, images = null) {
 
   const contentDiv = document.createElement('div');
   contentDiv.className = 'message-content';
+
+  // 如果有思考链，先显示思考链
+  if (role === 'assistant' && thinking) {
+    const thinkingBlock = createThinkingBlock(thinking);
+    contentDiv.appendChild(thinkingBlock);
+  }
 
   // 创建气泡容器
   const bubbleDiv = document.createElement('div');
@@ -1016,6 +1169,58 @@ function appendMessage(role, content, images = null) {
     contentDiv.appendChild(imagesDiv);
   }
 
+  // AI 回答添加操作按钮（复制、下载）
+  if (role === 'assistant' && content) {
+    const actionsDiv = document.createElement('div');
+    actionsDiv.className = 'message-actions';
+
+    // 复制按钮
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'message-action-btn';
+    copyBtn.title = '复制';
+    copyBtn.innerHTML = `<i data-lucide="copy"></i>`;
+    copyBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(content);
+        copyBtn.innerHTML = `<i data-lucide="check"></i>`;
+        copyBtn.classList.add('copied');
+        setTimeout(() => {
+          copyBtn.innerHTML = `<i data-lucide="copy"></i>`;
+          copyBtn.classList.remove('copied');
+          if (typeof lucide !== 'undefined') {
+            lucide.createIcons({ nodes: [copyBtn] });
+          }
+        }, 2000);
+        if (typeof lucide !== 'undefined') {
+          lucide.createIcons({ nodes: [copyBtn] });
+        }
+      } catch (e) {
+        console.error('复制失败:', e);
+      }
+    });
+
+    // 下载按钮
+    const downloadBtn = document.createElement('button');
+    downloadBtn.className = 'message-action-btn';
+    downloadBtn.title = '下载';
+    downloadBtn.innerHTML = `<i data-lucide="download"></i>`;
+    downloadBtn.addEventListener('click', () => {
+      const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `gemini-response-${Date.now()}.md`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    });
+
+    actionsDiv.appendChild(copyBtn);
+    actionsDiv.appendChild(downloadBtn);
+    contentDiv.appendChild(actionsDiv);
+  }
+
   const timestamp = document.createElement('div');
   timestamp.className = 'message-timestamp';
   timestamp.textContent = new Date().toLocaleTimeString('zh-CN', {
@@ -1044,11 +1249,15 @@ function showTypingIndicator() {
   const contentDiv = document.createElement('div');
   contentDiv.className = 'message-content';
 
-  const typingDiv = document.createElement('div');
-  typingDiv.className = 'typing-indicator';
-  typingDiv.innerHTML = '<div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div>';
+  // 显示"正在思考"的动画效果
+  const thinkingIndicator = document.createElement('div');
+  thinkingIndicator.className = 'thinking-indicator';
+  thinkingIndicator.innerHTML = `
+    <i data-lucide="sparkles" class="thinking-icon spinning"></i>
+    <span class="thinking-title thinking-active">正在思考...</span>
+  `;
 
-  contentDiv.appendChild(typingDiv);
+  contentDiv.appendChild(thinkingIndicator);
   messageDiv.appendChild(avatar);
   messageDiv.appendChild(contentDiv);
 

@@ -1097,7 +1097,7 @@ async def list_models() -> dict:
     return {
         "object": "list",
         "data": [
-            {"id": "auto", "object": "model", "owned_by": "google", "name": "自动选择", "description": "Gemini Enterprise 会选择最合适的选项"},
+            {"id": "auto", "object": "model", "owned_by": "google", "name": "自动", "description": "Gemini Enterprise 会选择最合适的选项"},
             {"id": "gemini-2.5-flash", "object": "model", "owned_by": "google", "name": "Gemini 2.5 Flash", "description": "适用于执行日常任务"},
             {"id": "gemini-2.5-pro", "object": "model", "owned_by": "google", "name": "Gemini 2.5 Pro", "description": "最适用于执行复杂任务"},
             {"id": "gemini-3-pro-preview", "object": "model", "owned_by": "google", "name": "Gemini 3 Pro Preview", "description": "先进的推理模型"},

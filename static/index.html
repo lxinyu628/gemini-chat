@@ -18,14 +18,14 @@
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-header">
       <button class="new-chat-btn" id="newChatBtn">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M12 5v14M5 12h14" />
-        </svg>
+        <i data-lucide="square-pen"></i>
         <span>新对话</span>
       </button>
     </div>
 
-    <div class="conversations-list" id="conversationsList">
+    <div class="conversation-list-header">对话</div>
+
+    <div class="conversations-list" id="conversationsLists">
       <!-- 对话列表将动态加载 -->
     </div>
 
@@ -85,36 +85,65 @@
         <div class="file-preview" id="filePreview"></div>
 
         <div class="input-wrapper">
-          <textarea id="messageInput" class="message-input" placeholder="输入消息..."></textarea>
+          <textarea id="messageInput" class="message-input" placeholder="询问任何问题" rows="1"></textarea>
 
           <div class="input-toolbar">
             <div class="toolbar-left">
-              <button class="icon-btn attach-btn" id="attachBtn" title="上传文件">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path
-                    d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-                </svg>
+              <button class="icon-btn attach-btn" id="attachBtn" title="添加文件">
+                <i data-lucide="badge-plus"></i>
               </button>
               <input type="file" id="fileInput" accept="image/*,.pdf,.txt,.doc,.docx" multiple hidden>
 
-              <select id="modelSelect" class="toolbar-model-select">
-                <option value="business-gemini">Business Gemini</option>
-              </select>
-
-              <span class="input-hint">
-                <kbd>Enter</kbd> 发送 · <kbd>Shift</kbd>+<kbd>Enter</kbd> 换行
-              </span>
+              <div class="model-selector" id="modelSelector">
+                <svg class="model-icon" width="20" height="20" viewBox="0 0 128 128" fill="none"
+                  xmlns="http://www.w3.org/2000/svg">
+                  <mask id="mask_model_icon" style="mask-type:alpha" maskUnits="userSpaceOnUse" x="8" y="8" width="112"
+                    height="112">
+                    <path
+                      d="M63.892 8C62.08 38.04 38.04 62.08 8 63.892V64.108C38.04 65.92 62.08 89.96 63.892 120H64.108C65.92 89.96 89.96 65.92 120 64.108V63.892C89.96 62.08 65.92 38.04 64.108 8H63.892Z"
+                      fill="url(#paint_model_0)" />
+                  </mask>
+                  <g mask="url(#mask_model_icon)">
+                    <path
+                      d="M64 0C99.3216 0 128 28.6784 128 64C128 99.3216 99.3216 128 64 128C28.6784 128 0 99.3216 0 64C0 28.6784 28.6784 0 64 0Z"
+                      fill="url(#paint_model_1)" />
+                  </g>
+                  <defs>
+                    <linearGradient id="paint_model_0" x1="100.892" y1="30.04" x2="22.152" y2="96.848"
+                      gradientUnits="userSpaceOnUse">
+                      <stop stop-color="#217BFE" />
+                      <stop offset="0.14" stop-color="#1485FC" />
+                      <stop offset="0.27" stop-color="#078EFB" />
+                      <stop offset="0.52" stop-color="#548FFD" />
+                      <stop offset="0.78" stop-color="#A190FF" />
+                      <stop offset="0.89" stop-color="#AF94FE" />
+                      <stop offset="1" stop-color="#BD99FE" />
+                    </linearGradient>
+                    <linearGradient id="paint_model_1" x1="47.988" y1="82.52" x2="96.368" y2="32.456"
+                      gradientUnits="userSpaceOnUse">
+                      <stop stop-color="#217BFE" />
+                      <stop offset="0.14" stop-color="#1485FC" />
+                      <stop offset="0.27" stop-color="#078EFB" />
+                      <stop offset="0.52" stop-color="#548FFD" />
+                      <stop offset="0.78" stop-color="#A190FF" />
+                      <stop offset="0.89" stop-color="#AF94FE" />
+                      <stop offset="1" stop-color="#BD99FE" />
+                    </linearGradient>
+                  </defs>
+                </svg>
+                <span class="model-name" id="modelName">自动</span>
+                <i data-lucide="chevron-down" class="model-chevron"></i>
+              </div>
             </div>
 
             <div class="toolbar-right">
               <button class="icon-btn send-btn" id="sendBtn" disabled>
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
-                </svg>
+                <i data-lucide="send-horizontal"></i>
               </button>
             </div>
           </div>
         </div>
+        <div class="ai-disclaimer">生成式 AI 展示的信息（包括与人有关的信息）可能不够准确，请仔细核查回答内容。</div>
       </div>
     </div>
   </main>
