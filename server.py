@@ -267,15 +267,19 @@ async def get_status() -> dict:
         # 如果保活服务还没有检查过，主动检查一次
         session_status = check_session_status(config)
 
-        # 处理 warning 状态（如 Cookies 无效/缺少 __Host-C_OSES）
+        # 处理 warning 状态（如 Cookies 无效/缺少 __Host-C_OSES，但 JWT 路径可用）
         if session_status.get("warning", False):
+            # warning=True 时，如果 valid=True 说明 JWT 路径可用，可以继续使用
+            is_valid = session_status.get("valid", False)
             return {
-                "logged_in": True,  # 可能仍然可用，只是状态检查有问题
+                "logged_in": is_valid,  # 根据 valid 判断是否可用
                 "warning": True,
-                "message": session_status.get("error", "登录状态异常"),
+                "expired": False,  # warning 状态不认为过期
+                "message": "登录异常，可能 Cookie 校验失败但可继续使用" if is_valid else session_status.get("error", "登录状态异常"),
                 "debug": {
                     "error": session_status.get("error"),
                     "raw_response": session_status.get("raw_response"),
+                    "cookie_debug": session_status.get("cookie_debug"),
                 },
             }
 
@@ -321,23 +325,29 @@ async def debug_session_status() -> dict:
 
     返回信息包括：
     - cookie_lengths: 各 cookie 的长度，帮助确认 cookie 是否完整
+    - cookie_header_preview: 实际使用的 cookie header 预览（前100字符）
+    - cookie_header_length: 实际使用的 cookie header 长度
+    - cookie_source: cookie 来源（cookie_raw 或 fields）
     - cookies_saved_at: cookie 保存时间
     - cookie_profile_dir: cookie 来源的浏览器用户数据目录（如果有）
     - 多账号检测提示
     """
     import httpx
+    from biz_gemini.auth import _build_cookie_header
 
     config = load_config()
     secure_c_ses = config.get("secure_c_ses")
     host_c_oses = config.get("host_c_oses")
     nid = config.get("nid")
     csesidx = config.get("csesidx")
+    cookie_raw = config.get("cookie_raw")
 
     # Cookie 长度信息（帮助确认 cookie 是否完整）
     cookie_lengths = {
         "secure_c_ses_len": len(secure_c_ses) if secure_c_ses else 0,
         "host_c_oses_len": len(host_c_oses) if host_c_oses else 0,
         "nid_len": len(nid) if nid else 0,
+        "cookie_raw_len": len(cookie_raw) if cookie_raw else 0,
     }
 
     # Cookie 保存时间和来源目录
@@ -352,11 +362,8 @@ async def debug_session_status() -> dict:
             "cookie_profile_dir": cookie_profile_dir,
         }
 
-    cookie_str = f"__Secure-C_SES={secure_c_ses}"
-    if host_c_oses:
-        cookie_str += f"; __Host-C_OSES={host_c_oses}"
-    if nid:
-        cookie_str += f"; NID={nid}"
+    # 使用 _build_cookie_header 获取实际使用的 cookie 和调试信息
+    cookie_str, cookie_debug = _build_cookie_header(config)
 
     url = f"https://auth.business.gemini.google/list-sessions?csesidx={csesidx}&rt=json"
     proxy = get_proxy(config)
@@ -418,10 +425,14 @@ async def debug_session_status() -> dict:
             "first_session_csesidx": sessions_list[0].get("csesidx") if sessions_list else None,
             "first_session_csesidx_type": type(sessions_list[0].get("csesidx")).__name__ if sessions_list else None,
             "check_result": check_session_status(config),
-            # 新增调试字段
+            # Cookie 调试字段
             "cookie_lengths": cookie_lengths,
             "cookies_saved_at": cookies_saved_at,
             "cookie_profile_dir": cookie_profile_dir,
+            # 新增：实际使用的 cookie header 信息
+            "cookie_header_preview": cookie_debug.get("cookie_header_preview"),
+            "cookie_header_length": cookie_debug.get("cookie_header_length"),
+            "cookie_source": cookie_debug.get("cookie_source"),
         }
 
         if multi_account_warning:
@@ -436,6 +447,9 @@ async def debug_session_status() -> dict:
             "cookie_lengths": cookie_lengths,
             "cookies_saved_at": cookies_saved_at,
             "cookie_profile_dir": cookie_profile_dir,
+            "cookie_header_preview": cookie_debug.get("cookie_header_preview") if 'cookie_debug' in dir() else None,
+            "cookie_header_length": cookie_debug.get("cookie_header_length") if 'cookie_debug' in dir() else None,
+            "cookie_source": cookie_debug.get("cookie_source") if 'cookie_debug' in dir() else None,
         }
 
 

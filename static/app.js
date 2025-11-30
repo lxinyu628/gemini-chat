@@ -506,13 +506,20 @@ async function checkStatus() {
 
         elements.statusIndicator.className = 'status-indicator';
 
-        if (data.logged_in === false || data.expired) {
+        // 仅在 expired 或 logged_in=false 时弹过期模态框
+        // warning=true 时只提示状态异常，不弹模态
+        if (data.expired || data.logged_in === false) {
             elements.statusIndicator.classList.add('error');
             statusText.textContent = '登录已过期';
             showExpiredModal();
         } else if (data.warning) {
+            // warning 状态：可能 Cookie 校验失败但可继续使用
             elements.statusIndicator.classList.add('warning');
-            statusText.textContent = data.message || '状态异常';
+            statusText.textContent = '登录异常，可能 Cookie 校验失败但可继续使用';
+            // 不弹模态框，只在控制台输出调试信息
+            if (data.debug) {
+                console.warn('登录状态警告:', data.message, data.debug);
+            }
         } else if (data.logged_in) {
             elements.statusIndicator.classList.add('online');
             // 显示用户名或简单的"已登录"状态

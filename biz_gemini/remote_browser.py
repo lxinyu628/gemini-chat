@@ -270,19 +270,36 @@ class RemoteBrowserSession:
                     after = after.split(sep, 1)[0]
                 group_id = after
 
-            # 获取 cookies
+            # 获取 cookies - 收集 auth.business.gemini.google 和 business.gemini.google 域的全部 cookie
             cookies = await self._context.cookies()
             secure_c_ses = None
             host_c_oses = None
             nid = None
 
+            # 收集相关域的所有 cookie 用于构造 cookie_raw
+            gemini_cookies = []
+            target_domains = ["auth.business.gemini.google", "business.gemini.google", ".business.gemini.google"]
+
             for cookie in cookies:
+                cookie_domain = cookie.get("domain", "")
+                # 检查是否是目标域的 cookie
+                is_target_domain = any(
+                    cookie_domain == d or cookie_domain.endswith(d)
+                    for d in target_domains
+                )
+                if is_target_domain:
+                    gemini_cookies.append(f"{cookie['name']}={cookie['value']}")
+
+                # 同时提取关键 cookie 字段（保持向后兼容）
                 if cookie["name"] == "__Secure-C_SES":
                     secure_c_ses = cookie["value"]
                 elif cookie["name"] == "__Host-C_OSES":
                     host_c_oses = cookie["value"]
                 elif cookie["name"] == "NID":
                     nid = cookie["value"]
+
+            # 构造 cookie_raw（按原样拼出 raw cookie header）
+            cookie_raw = "; ".join(gemini_cookies) if gemini_cookies else None
 
             if secure_c_ses and csesidx and group_id:
                 # 获取当前使用的用户数据目录
@@ -294,6 +311,7 @@ class RemoteBrowserSession:
                     "nid": nid,
                     "csesidx": csesidx,
                     "group_id": group_id,
+                    "cookie_raw": cookie_raw,  # 新增：完整的 raw cookie header
                     "cookies_saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "cookie_profile_dir": profile_dir,  # 记录 cookie 来源目录
                 }
@@ -302,7 +320,8 @@ class RemoteBrowserSession:
                 logger.info(f"登录成功，保存 cookies: csesidx={csesidx}, profile_dir={profile_dir}")
                 logger.debug(f"Cookie 长度: secure_c_ses={len(secure_c_ses) if secure_c_ses else 0}, "
                            f"host_c_oses={len(host_c_oses) if host_c_oses else 0}, "
-                           f"nid={len(nid) if nid else 0}")
+                           f"nid={len(nid) if nid else 0}, "
+                           f"cookie_raw={len(cookie_raw) if cookie_raw else 0}")
 
                 self.status = BrowserSessionStatus.LOGIN_SUCCESS
                 self.message = "登录成功！凭证已获取"

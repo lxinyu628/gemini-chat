@@ -84,6 +84,44 @@ def create_jwt(
     return token, float(now + lifetime)
 
 
+def _build_cookie_header(config: dict) -> tuple[str, dict]:
+    """构造 Cookie 字符串，优先使用 cookie_raw，否则用拆分字段拼接。
+
+    返回:
+        (cookie_str, debug_info) 元组
+        debug_info 包含 cookie_header_preview 和 cookie_header_length
+    """
+    cookie_raw = config.get("cookie_raw")
+
+    if cookie_raw:
+        # 优先使用 cookie_raw（完整的 raw cookie header）
+        cookie_str = cookie_raw
+        debug_info = {
+            "cookie_source": "cookie_raw",
+            "cookie_header_length": len(cookie_str),
+            "cookie_header_preview": cookie_str[:100] + "..." if len(cookie_str) > 100 else cookie_str,
+        }
+    else:
+        # 回退：使用拆分字段拼接
+        secure_c_ses = config.get("secure_c_ses")
+        host_c_oses = config.get("host_c_oses")
+        nid = config.get("nid")
+
+        cookie_str = f"__Secure-C_SES={secure_c_ses}"
+        if host_c_oses:
+            cookie_str += f"; __Host-C_OSES={host_c_oses}"
+        if nid:
+            cookie_str += f"; NID={nid}"
+
+        debug_info = {
+            "cookie_source": "fields",
+            "cookie_header_length": len(cookie_str),
+            "cookie_header_preview": cookie_str[:100] + "..." if len(cookie_str) > 100 else cookie_str,
+        }
+
+    return cookie_str, debug_info
+
+
 def check_session_status(config: Optional[dict] = None) -> dict:
     """通过 list-sessions 接口检查 session 是否过期。
 
@@ -95,15 +133,14 @@ def check_session_status(config: Optional[dict] = None) -> dict:
             "username": str,        # 用户名/邮箱
             "error": str | None,    # 错误信息
             "raw_response": dict,   # 原始响应（用于调试）
+            "cookie_debug": dict,   # cookie 调试信息
         }
     """
     if config is None:
         config = load_config()
 
     secure_c_ses = config.get("secure_c_ses")
-    host_c_oses = config.get("host_c_oses")  # 新增：读取 __Host-C_OSES
     csesidx = config.get("csesidx")
-    nid = config.get("nid")
 
     if not secure_c_ses or not csesidx:
         return {
@@ -113,16 +150,13 @@ def check_session_status(config: Optional[dict] = None) -> dict:
             "username": None,
             "error": "缺少凭证信息",
             "raw_response": None,
+            "cookie_debug": None,
         }
 
     proxy = get_proxy(config)
 
-    # 构造 Cookie 字符串，保持和浏览器一致
-    cookie_str = f"__Secure-C_SES={secure_c_ses}"
-    if host_c_oses:
-        cookie_str += f"; __Host-C_OSES={host_c_oses}"
-    if nid:
-        cookie_str += f"; NID={nid}"
+    # 构造 Cookie 字符串，优先使用 cookie_raw
+    cookie_str, cookie_debug = _build_cookie_header(config)
 
     url = f"{LIST_SESSIONS_URL}?csesidx={csesidx}&rt=json"
 
@@ -164,17 +198,39 @@ def check_session_status(config: Optional[dict] = None) -> dict:
 
             # 检查是否是 INVALID_COOKIES 状态
             status = raw_response.get("status") if isinstance(raw_response, dict) else None
+            host_c_oses = config.get("host_c_oses")
             if status == "INVALID_COOKIES":
-                # Cookies 无效/缺少 __Host-C_OSES，返回 warning 而不是 expired
-                missing_cookie_hint = "缺少 __Host-C_OSES" if not host_c_oses else "Cookies 无效"
-                return {
-                    "valid": False,
-                    "expired": False,  # 不强行认为过期
-                    "warning": True,
-                    "username": None,
-                    "error": f"Cookies 无效或缺失 ({missing_cookie_hint})",
-                    "raw_response": raw_response,
-                }
+                # Cookies 无效/缺少 __Host-C_OSES
+                # 新增回退：尝试通过 JWT 路径（BizGeminiClient.list_sessions）判断
+                try:
+                    from .biz_client import BizGeminiClient
+                    jwt_manager = JWTManager(config=config)
+                    biz_client = BizGeminiClient(config, jwt_manager)
+                    # 尝试调用 list_sessions（JWT 路径）
+                    biz_client.list_sessions(page_size=1)
+                    # 如果成功，说明 JWT 路径可用，标记 valid=True, warning=True
+                    missing_cookie_hint = "缺少 __Host-C_OSES" if not host_c_oses else "Cookies 无效"
+                    return {
+                        "valid": True,  # JWT 路径可用
+                        "expired": False,
+                        "warning": True,  # 但 list-sessions 失败，有警告
+                        "username": None,
+                        "error": f"list-sessions 失败但 JWT 路径可用 ({missing_cookie_hint})",
+                        "raw_response": raw_response,
+                        "cookie_debug": cookie_debug,
+                    }
+                except Exception as jwt_err:
+                    # JWT 路径也失败，返回 warning
+                    missing_cookie_hint = "缺少 __Host-C_OSES" if not host_c_oses else "Cookies 无效"
+                    return {
+                        "valid": False,
+                        "expired": False,  # 不强行认为过期
+                        "warning": True,
+                        "username": None,
+                        "error": f"Cookies 无效或缺失 ({missing_cookie_hint}), JWT 路径也失败: {jwt_err}",
+                        "raw_response": raw_response,
+                        "cookie_debug": cookie_debug,
+                    }
 
             # 尝试通过 getoxsrf 验证 session 是否有效
             try:
@@ -187,16 +243,35 @@ def check_session_status(config: Optional[dict] = None) -> dict:
                     "username": None,
                     "error": None,
                     "raw_response": raw_response,
+                    "cookie_debug": cookie_debug,
                 }
             except Exception:
-                return {
-                    "valid": False,
-                    "expired": True,
-                    "warning": False,
-                    "username": None,
-                    "error": "HTTP 401",
-                    "raw_response": raw_response,
-                }
+                # getoxsrf 失败，再尝试 JWT 路径回退
+                try:
+                    from .biz_client import BizGeminiClient
+                    jwt_manager = JWTManager(config=config)
+                    biz_client = BizGeminiClient(config, jwt_manager)
+                    biz_client.list_sessions(page_size=1)
+                    # JWT 路径成功
+                    return {
+                        "valid": True,
+                        "expired": False,
+                        "warning": True,
+                        "username": None,
+                        "error": "list-sessions 返回 401 但 JWT 路径可用",
+                        "raw_response": raw_response,
+                        "cookie_debug": cookie_debug,
+                    }
+                except Exception:
+                    return {
+                        "valid": False,
+                        "expired": True,
+                        "warning": False,
+                        "username": None,
+                        "error": "HTTP 401",
+                        "raw_response": raw_response,
+                        "cookie_debug": cookie_debug,
+                    }
 
         if resp.status_code != 200:
             return {
@@ -206,6 +281,7 @@ def check_session_status(config: Optional[dict] = None) -> dict:
                 "username": None,
                 "error": f"HTTP {resp.status_code}",
                 "raw_response": None,
+                "cookie_debug": cookie_debug,
             }
 
         text = resp.text
@@ -237,6 +313,7 @@ def check_session_status(config: Optional[dict] = None) -> dict:
                 "username": current_session.get("subject") or current_session.get("displayName"),
                 "error": None,
                 "raw_response": data,
+                "cookie_debug": cookie_debug,
             }
 
         return {
@@ -246,6 +323,7 @@ def check_session_status(config: Optional[dict] = None) -> dict:
             "username": None,
             "error": "未找到 session 信息",
             "raw_response": data,
+            "cookie_debug": cookie_debug,
         }
 
     except json.JSONDecodeError as e:
@@ -256,6 +334,7 @@ def check_session_status(config: Optional[dict] = None) -> dict:
             "username": None,
             "error": f"JSON 解析失败: {e}",
             "raw_response": None,
+            "cookie_debug": cookie_debug if 'cookie_debug' in dir() else None,
         }
     except Exception as e:
         return {
@@ -265,6 +344,7 @@ def check_session_status(config: Optional[dict] = None) -> dict:
             "username": None,
             "error": str(e),
             "raw_response": None,
+            "cookie_debug": cookie_debug if 'cookie_debug' in dir() else None,
         }
 
 
