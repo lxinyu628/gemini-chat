@@ -142,11 +142,19 @@ class BrowserKeepAliveService:
                 "--disable-renderer-backgrounding",  # 禁用渲染器后台化
             ]
 
-            self._browser = await self._playwright.chromium.launch(
-                headless=self.headless,
-                channel="chrome",  # 使用本机 Chrome
-                args=launch_args,
-            )
+            # 尝试使用本机 Chrome，如果不存在则使用 Playwright 自带的 Chromium
+            try:
+                self._browser = await self._playwright.chromium.launch(
+                    headless=self.headless,
+                    channel="chrome",  # 优先使用本机 Chrome
+                    args=launch_args,
+                )
+            except Exception as e:
+                logger.info(f"本机 Chrome 不可用 ({e})，使用 Playwright Chromium")
+                self._browser = await self._playwright.chromium.launch(
+                    headless=self.headless,
+                    args=launch_args,
+                )
 
             # 反检测：使用更真实的浏览器上下文配置
             context_kwargs = {
@@ -555,11 +563,18 @@ async def try_refresh_cookie_via_browser(headless: bool = True) -> dict:
             "--no-default-browser-check",
         ]
 
-        browser = await playwright.chromium.launch(
-            headless=headless,
-            channel="chrome",
-            args=launch_args,
-        )
+        # 尝试使用本机 Chrome，如果不存在则使用 Playwright Chromium
+        try:
+            browser = await playwright.chromium.launch(
+                headless=headless,
+                channel="chrome",
+                args=launch_args,
+            )
+        except Exception:
+            browser = await playwright.chromium.launch(
+                headless=headless,
+                args=launch_args,
+            )
 
         # 反检测：使用更真实的浏览器上下文配置
         context_kwargs = {
