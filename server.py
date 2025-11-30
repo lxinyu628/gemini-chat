@@ -67,10 +67,66 @@ def on_config_changed(new_config: dict) -> None:
     # 可以在这里添加其他配置变更处理逻辑
     # 例如：更新代理配置、刷新客户端等
 
+# 用于标记是否是第一个 worker（避免多 worker 重复启动浏览器）
+_is_primary_worker = False
+
+
+def _check_primary_worker() -> bool:
+    """检查是否应该作为主 worker 运行后台服务
+
+    在多 worker 模式下，只有一个 worker 应该运行浏览器保活等后台服务。
+    使用文件锁来协调（跨平台兼容）。
+    """
+    import os
+    import tempfile
+
+    # 检查是否在 Gunicorn 多 worker 模式下
+    # Gunicorn 会设置 SERVER_SOFTWARE 环境变量
+    server_software = os.environ.get("SERVER_SOFTWARE", "")
+    if "gunicorn" not in server_software.lower():
+        # 非 Gunicorn 模式（如直接 uvicorn），总是主 worker
+        return True
+
+    # 使用跨平台的文件锁机制
+    lock_file = os.path.join(tempfile.gettempdir(), "gemini_chat_browser_keep_alive.lock")
+
+    try:
+        # Windows 使用 msvcrt，Unix 使用 fcntl
+        if os.name == "nt":
+            # Windows
+            import msvcrt
+            lock_fd = open(lock_file, "w")
+            try:
+                msvcrt.locking(lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
+                globals()["_lock_fd"] = lock_fd
+                return True
+            except (IOError, OSError):
+                lock_fd.close()
+                return False
+        else:
+            # Unix/Linux/Mac
+            import fcntl
+            lock_fd = open(lock_file, "w")
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                globals()["_lock_fd"] = lock_fd
+                return True
+            except (IOError, OSError, BlockingIOError):
+                lock_fd.close()
+                return False
+
+    except Exception as e:
+        # 任何异常都回退到允许运行（单 worker 模式或无法获取锁）
+        logger.warning(f"检查主 worker 时出错，默认允许运行: {e}")
+        return True
+
+
 # 应用生命周期事件
 @app.on_event("startup")
 async def startup_event() -> None:
     """应用启动时执行"""
+    global _is_primary_worker
+
     logger.info("启动配置文件监控...")
     start_config_watcher(callback=on_config_changed)
     logger.info("配置监控已启动")
@@ -79,41 +135,57 @@ async def startup_event() -> None:
     config = load_config()
     browser_keep_alive_config = config.get("browser_keep_alive", {})
 
-    # 启动 Session 保活服务
-    logger.info("启动 Session 保活服务...")
-    auto_browser_refresh = browser_keep_alive_config.get("enabled", False)
-    keep_alive = get_keep_alive_service(
-        interval_minutes=10,
-        auto_browser_refresh=auto_browser_refresh,
-    )
-    await keep_alive.start()
-    logger.info(f"Session 保活服务已启动（每 10 分钟检查一次，自动浏览器刷新: {auto_browser_refresh}）")
+    # 检查是否是主 worker
+    _is_primary_worker = _check_primary_worker()
 
-    # 启动浏览器保活服务（如果启用）
-    if browser_keep_alive_config.get("enabled", False):
-        logger.info("启动浏览器保活服务...")
-        browser_keep_alive = get_browser_keep_alive_service(
-            interval_minutes=browser_keep_alive_config.get("interval_minutes", 60),
-            headless=browser_keep_alive_config.get("headless", True),
+    if _is_primary_worker:
+        # 启动 Session 保活服务（只在主 worker 中运行）
+        logger.info("启动 Session 保活服务...")
+        auto_browser_refresh = browser_keep_alive_config.get("enabled", False)
+        keep_alive = get_keep_alive_service(
+            interval_minutes=10,
+            auto_browser_refresh=auto_browser_refresh,
         )
-        await browser_keep_alive.start()
-        logger.info(f"浏览器保活服务已启动（每 {browser_keep_alive_config.get('interval_minutes', 60)} 分钟刷新一次）")
+        await keep_alive.start()
+        logger.info(f"Session 保活服务已启动（每 10 分钟检查一次，自动浏览器刷新: {auto_browser_refresh}）")
+
+        # 启动浏览器保活服务（如果启用，只在主 worker 中运行）
+        if browser_keep_alive_config.get("enabled", False):
+            logger.info("启动浏览器保活服务...")
+            browser_keep_alive = get_browser_keep_alive_service(
+                interval_minutes=browser_keep_alive_config.get("interval_minutes", 60),
+                headless=browser_keep_alive_config.get("headless", True),
+            )
+            await browser_keep_alive.start()
+            logger.info(f"浏览器保活服务已启动（每 {browser_keep_alive_config.get('interval_minutes', 60)} 分钟刷新一次）")
+    else:
+        logger.info("非主 worker，跳过后台服务启动")
 
 @app.on_event("shutdown")
 async def shutdown_event() -> None:
     """应用关闭时执行"""
-    logger.info("停止 Session 保活服务...")
-    keep_alive = get_keep_alive_service()
-    await keep_alive.stop()
-    logger.info("Session 保活服务已停止")
+    global _is_primary_worker
 
-    # 停止浏览器保活服务
-    config = load_config()
-    if config.get("browser_keep_alive", {}).get("enabled", False):
-        logger.info("停止浏览器保活服务...")
-        browser_keep_alive = get_browser_keep_alive_service()
-        await browser_keep_alive.stop()
-        logger.info("浏览器保活服务已停止")
+    if _is_primary_worker:
+        logger.info("停止 Session 保活服务...")
+        keep_alive = get_keep_alive_service()
+        await keep_alive.stop()
+        logger.info("Session 保活服务已停止")
+
+        # 停止浏览器保活服务
+        config = load_config()
+        if config.get("browser_keep_alive", {}).get("enabled", False):
+            logger.info("停止浏览器保活服务...")
+            browser_keep_alive = get_browser_keep_alive_service()
+            await browser_keep_alive.stop()
+            logger.info("浏览器保活服务已停止")
+
+        # 释放文件锁
+        if "_lock_fd" in globals():
+            try:
+                globals()["_lock_fd"].close()
+            except Exception:
+                pass
 
     logger.info("停止配置文件监控...")
     stop_config_watcher()
