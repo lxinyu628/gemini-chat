@@ -828,7 +828,8 @@ async function loadConversation(sessionId, sessionName = null) {
         } else if (msg.thinking) {
           thinking = msg.thinking;
         }
-        appendMessage(msg.role, msg.content, msg.images, thinking);
+        // 传递 error_info 和 skipped 标志
+        appendMessage(msg.role, msg.content, msg.images, thinking, msg.error_info, msg.skipped);
       });
     } else {
       elements.welcomeScreen.style.display = 'flex';
@@ -1154,7 +1155,7 @@ function createThinkingBlock(thinking, isActive = false) {
 }
 
 // 消息显示
-function appendMessage(role, content, images = null, thinking = null) {
+function appendMessage(role, content, images = null, thinking = null, errorInfo = null, isSkipped = false) {
   const messageDiv = document.createElement('div');
   messageDiv.className = `message ${role}`;
 
@@ -1178,12 +1179,39 @@ function appendMessage(role, content, images = null, thinking = null) {
   const textDiv = document.createElement('div');
   textDiv.className = 'message-text';
 
+  // 如果是跳过的消息（错误/策略违规），显示特殊格式
+  if (role === 'assistant' && isSkipped && errorInfo) {
+    bubbleDiv.className = 'message-bubble error-bubble';
+
+    const errorContainer = document.createElement('div');
+    errorContainer.className = 'error-message-container';
+
+    // 第一行：图标 + 标题
+    const errorHeader = document.createElement('div');
+    errorHeader.className = 'error-message-header';
+    errorHeader.innerHTML = `
+      <i data-lucide="shield-alert" class="error-icon"></i>
+      <span class="error-title">${escapeHtml(errorInfo.title)}</span>
+    `;
+
+    errorContainer.appendChild(errorHeader);
+
+    // 第二行：详细原因（如果有）
+    if (errorInfo.detail) {
+      const errorDetail = document.createElement('div');
+      errorDetail.className = 'error-message-detail';
+      errorDetail.textContent = `（原因: ${errorInfo.detail}）`;
+      errorContainer.appendChild(errorDetail);
+    }
+
+    textDiv.appendChild(errorContainer);
+  }
   // 用户消息使用纯文本，AI 回复使用 Markdown 渲染
-  if (role === 'assistant' && content) {
+  else if (role === 'assistant' && content) {
     textDiv.innerHTML = renderMarkdown(content);
     // 为代码块添加复制按钮
     addCodeCopyButtons(textDiv);
-  } else {
+  } else if (content) {
     textDiv.textContent = content;
   }
 
