@@ -984,15 +984,9 @@ async function sendMessage() {
   let finalMessage = message;
   let displayMessage = message;
 
-  // 如果有上传的文件，为模型添加文件提示，但不在 UI 中插入提示文本
+  // 如果有上传的文件，为模型添加文件提示，但不在 UI 中插入文件名
   if (pendingAttachments.length > 0) {
-    const fileList = pendingAttachments.map(f => f.file_name || f.file_id).join(', ');
-    if (!message) {
-      finalMessage = `请结合我上传的文件进行分析。文件列表: ${fileList}`;
-      displayMessage = '';
-    } else {
-      finalMessage = `${message}\n\n(已附带文件: ${fileList})`;
-    }
+    finalMessage = message || '请结合我上传的文件进行分析。';
   }
 
   // 显示用户消息（包含文件信息）
@@ -1019,6 +1013,7 @@ async function sendMessage() {
         stream: true,
         session_id: state.currentConversationId,
         session_name: state.currentSessionName,
+        file_ids: pendingAttachments.map(f => f.file_id).filter(Boolean),
         include_image_data: true
       })
     });
