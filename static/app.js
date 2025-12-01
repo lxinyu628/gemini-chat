@@ -829,7 +829,7 @@ async function loadConversation(sessionId, sessionName = null) {
           thinking = msg.thinking;
         }
         // 传递 error_info 和 skipped 标志
-        appendMessage(msg.role, msg.content, msg.images, thinking, msg.error_info, msg.skipped);
+        appendMessage(msg.role, msg.content, msg.images, thinking, msg.error_info, msg.skipped, msg.attachments);
       });
     } else {
       elements.welcomeScreen.style.display = 'flex';
@@ -917,6 +917,7 @@ function renderFilePreview() {
 async function sendMessage() {
   const message = elements.messageInput.value.trim();
   if (!message && state.uploadedFiles.length === 0) return;
+  const hadUploads = state.uploadedFiles.length > 0;
 
   // 确保有会话
   if (!state.currentConversationId) {
@@ -927,7 +928,7 @@ async function sendMessage() {
 
   // 如果有文件，先上传
   let uploadedFileNames = [];
-  let uploadResults = [];
+  const pendingAttachments = [];
   if (state.uploadedFiles.length > 0) {
     console.log('[DEBUG] 开始上传文件, session_id:', state.currentConversationId);
 
@@ -950,7 +951,13 @@ async function sendMessage() {
         if (uploadResp.ok) {
           const result = await uploadResp.json();
           uploadedFileNames.push(file.name);
-          uploadResults.push(result);
+          pendingAttachments.push({
+            file_id: result.file_id,
+            file_name: file.name,
+            mime_type: file.type || result.content_type,
+            size: file.size,
+            session_name: result.session_name || state.currentSessionName
+          });
           console.log('[DEBUG] 文件上传成功:', result);
         } else {
           const errorText = await uploadResp.text();
@@ -968,24 +975,28 @@ async function sendMessage() {
     console.log('[DEBUG] 上传完成, 成功:', uploadedFileNames.length, '个文件');
   }
 
+  if (!message && hadUploads && pendingAttachments.length === 0) {
+    toast.error('文件上传失败，请重试');
+    return;
+  }
+
   // 构建消息内容
   let finalMessage = message;
   let displayMessage = message;
 
-  // 如果有上传的文件，在消息中添加提示
-  if (uploadedFileNames.length > 0) {
-    const fileList = uploadedFileNames.join(', ');
+  // 如果有上传的文件，为模型添加文件提示，但不在 UI 中插入提示文本
+  if (pendingAttachments.length > 0) {
+    const fileList = pendingAttachments.map(f => f.file_name || f.file_id).join(', ');
     if (!message) {
-      finalMessage = `请分析上传的文件: ${fileList}`;
-      displayMessage = `[已上传文件: ${fileList}]\n请分析这些文件`;
+      finalMessage = `请结合我上传的文件进行分析。文件列表: ${fileList}`;
+      displayMessage = '';
     } else {
-      // 在消息前添加文件信息
-      displayMessage = `[已上传文件: ${fileList}]\n${message}`;
+      finalMessage = `${message}\n\n(已附带文件: ${fileList})`;
     }
   }
 
   // 显示用户消息（包含文件信息）
-  appendMessage('user', displayMessage);
+  appendMessage('user', displayMessage || '', null, null, null, false, pendingAttachments);
 
   // 清空输入
   elements.messageInput.value = '';
@@ -1155,7 +1166,7 @@ function createThinkingBlock(thinking, isActive = false) {
 }
 
 // 消息显示
-function appendMessage(role, content, images = null, thinking = null, errorInfo = null, isSkipped = false) {
+function appendMessage(role, content, images = null, thinking = null, errorInfo = null, isSkipped = false, attachments = null) {
   const messageDiv = document.createElement('div');
   messageDiv.className = `message ${role}`;
 
@@ -1178,6 +1189,7 @@ function appendMessage(role, content, images = null, thinking = null, errorInfo 
 
   const textDiv = document.createElement('div');
   textDiv.className = 'message-text';
+  let hasTextContent = false;
 
   // 如果是跳过的消息（错误/策略违规），显示特殊格式
   if (role === 'assistant' && isSkipped && errorInfo) {
@@ -1205,17 +1217,66 @@ function appendMessage(role, content, images = null, thinking = null, errorInfo 
     }
 
     textDiv.appendChild(errorContainer);
+    hasTextContent = true;
   }
   // 用户消息使用纯文本，AI 回复使用 Markdown 渲染
   else if (role === 'assistant' && content) {
     textDiv.innerHTML = renderMarkdown(content);
     // 为代码块添加复制按钮
     addCodeCopyButtons(textDiv);
+    hasTextContent = true;
   } else if (content) {
     textDiv.textContent = content;
+    hasTextContent = true;
   }
 
-  bubbleDiv.appendChild(textDiv);
+  // 如果有附件但没有正文，给一个轻量提示文案
+  if (!hasTextContent && attachments && attachments.length > 0) {
+    textDiv.textContent = '已上传的文件';
+    textDiv.classList.add('message-hint');
+    hasTextContent = true;
+  }
+
+  if (hasTextContent) {
+    bubbleDiv.appendChild(textDiv);
+  }
+
+  // 附件预览区域
+  if (attachments && attachments.length > 0) {
+    const attachmentsDiv = document.createElement('div');
+    attachmentsDiv.className = 'message-attachments';
+
+    attachments.forEach(att => {
+      const item = document.createElement('div');
+      item.className = 'attachment-item';
+
+      const nameEl = document.createElement('div');
+      nameEl.className = 'attachment-name';
+      nameEl.textContent = att.file_name || att.name || att.file_id || '未命名文件';
+
+      const metaEl = document.createElement('div');
+      metaEl.className = 'attachment-meta';
+      const mime = att.mime_type || att.mimeType || '未知类型';
+      const sizeVal = att.byte_size ?? att.size;
+      const metaParts = [mime];
+      if (sizeVal) {
+        metaParts.push(formatFileSize(sizeVal));
+      }
+      metaEl.textContent = metaParts.join(' · ');
+
+      item.appendChild(nameEl);
+      item.appendChild(metaEl);
+      attachmentsDiv.appendChild(item);
+    });
+
+    bubbleDiv.appendChild(attachmentsDiv);
+  }
+
+  // 当没有正文也没有附件时，保持原有结构
+  if (!hasTextContent && (!attachments || attachments.length === 0)) {
+    bubbleDiv.appendChild(textDiv);
+  }
+
   contentDiv.appendChild(bubbleDiv);
 
   // 添加图片
@@ -1451,6 +1512,19 @@ function scrollToBottom() {
 }
 
 // 工具函数
+function formatFileSize(bytes) {
+  if (!bytes || isNaN(bytes)) return '';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let size = bytes;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex++;
+  }
+  const displaySize = size % 1 === 0 ? size : size.toFixed(1);
+  return `${displaySize} ${units[unitIndex]}`;
+}
+
 function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;

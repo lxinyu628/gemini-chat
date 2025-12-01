@@ -407,11 +407,12 @@ body {
 
 .message-bubble {
   display: inline-flex;
-  flex-direction: row;
-  align-items: center;
+  flex-direction: column;
+  align-items: stretch;
   box-sizing: border-box;
   min-height: 32px;
   padding: 8px 16px;
+  gap: 6px;
 }
 
 /* 用户消息气泡 */
@@ -474,6 +475,58 @@ body {
   line-height: 1.6;
   /* white-space: pre-wrap; */
   word-wrap: break-word;
+}
+
+.message-hint {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.message.user .message-hint {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.message-attachments {
+  margin-top: 10px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  width: 100%;
+}
+
+.attachment-item {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-primary);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.attachment-name {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.attachment-meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.message.user .attachment-item {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.35);
+  color: white;
+}
+
+.message.user .attachment-name {
+  color: white;
+}
+
+.message.user .attachment-meta {
+  color: rgba(255, 255, 255, 0.85);
 }
 
 .message-images {

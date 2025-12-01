@@ -1127,14 +1127,37 @@ async def chat_completions(
     pending_file_ids = session_data.get("pending_file_ids", [])
     logger.debug(f"聊天请求: session_id={session_id}, canonical_session_id={canonical_session_id}, session_name={session_data.get('session_name')}, pending_file_ids={pending_file_ids}")
 
+    # 获取文件元数据用于渲染
+    attachment_metadata: List[Dict[str, Any]] = []
+    if pending_file_ids:
+        try:
+            session_name_for_files = session_data.get("session_name")
+            metadata_map = session_data["biz_client"]._get_session_file_metadata(session_name_for_files, filter_str="") if session_name_for_files else {}
+            for fid in pending_file_ids:
+                meta = metadata_map.get(fid, {}) if metadata_map else {}
+                attachment_metadata.append({
+                    "file_id": fid,
+                    "file_name": meta.get("name") or meta.get("fileId") or fid,
+                    "mime_type": meta.get("mimeType"),
+                    "byte_size": meta.get("byteSize"),
+                    "token_count": meta.get("tokenCount"),
+                    "download_uri": meta.get("downloadUri"),
+                })
+        except Exception as e:
+            logger.warning(f"获取文件元数据失败: {e}")
+            attachment_metadata = [{"file_id": fid} for fid in pending_file_ids]
+
     # 保存用户消息
     user_message = request.messages[-1] if request.messages else None
     if user_message:
-        session_data["messages"].append({
+        user_msg_data = {
             "role": user_message.role,
             "content": user_message.content,
             "timestamp": time.time(),
-        })
+        }
+        if attachment_metadata:
+            user_msg_data["attachments"] = attachment_metadata
+        session_data["messages"].append(user_msg_data)
         # 更新会话标题（使用第一条消息）
         if len(session_data["messages"]) == 1:
             title = user_message.content[:30]
