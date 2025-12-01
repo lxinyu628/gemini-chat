@@ -434,6 +434,42 @@ body {
   background: var(--bg-tertiary);
 }
 
+/* 用户消息文件信息气泡 */
+.message.user .file-info-bubble {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border-radius: 12px;
+  padding: 10px 14px;
+  margin-top: 8px;
+  align-self: flex-end;
+  border: 1px solid var(--border-color);
+}
+
+.file-info-content {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.file-info-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.file-info-icon {
+  width: 18px;
+  height: 18px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.file-info-name {
+  font-size: 13px;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
 /* 错误消息气泡 */
 .error-message-container {
   display: flex;

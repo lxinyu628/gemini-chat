@@ -1154,6 +1154,21 @@ function createThinkingBlock(thinking, isActive = false) {
   return block;
 }
 
+// 解析用户消息中的文件信息
+function parseUserMessageFileInfo(content) {
+  // 匹配格式: [已上传文件: xxx.png, yyy.pdf]\n消息内容
+  const fileInfoRegex = /^\[已上传文件: ([^\]]+)\]\n?/;
+  const match = content.match(fileInfoRegex);
+
+  if (match) {
+    const fileNames = match[1].split(', ').map(name => name.trim());
+    const textContent = content.slice(match[0].length);
+    return { fileNames, textContent };
+  }
+
+  return { fileNames: null, textContent: content };
+}
+
 // 消息显示
 function appendMessage(role, content, images = null, thinking = null, errorInfo = null, isSkipped = false) {
   const messageDiv = document.createElement('div');
@@ -1170,6 +1185,15 @@ function appendMessage(role, content, images = null, thinking = null, errorInfo 
   if (role === 'assistant' && thinking) {
     const thinkingBlock = createThinkingBlock(thinking);
     contentDiv.appendChild(thinkingBlock);
+  }
+
+  // 解析用户消息中的文件信息
+  let fileNames = null;
+  let textContent = content;
+  if (role === 'user' && content) {
+    const parsed = parseUserMessageFileInfo(content);
+    fileNames = parsed.fileNames;
+    textContent = parsed.textContent;
   }
 
   // 创建气泡容器
@@ -1211,12 +1235,54 @@ function appendMessage(role, content, images = null, thinking = null, errorInfo 
     textDiv.innerHTML = renderMarkdown(content);
     // 为代码块添加复制按钮
     addCodeCopyButtons(textDiv);
-  } else if (content) {
-    textDiv.textContent = content;
+  } else if (textContent) {
+    textDiv.textContent = textContent;
   }
 
   bubbleDiv.appendChild(textDiv);
   contentDiv.appendChild(bubbleDiv);
+
+  // 如果是用户消息且有文件信息，创建独立的文件信息气泡
+  if (role === 'user' && fileNames && fileNames.length > 0) {
+    const fileBubbleDiv = document.createElement('div');
+    fileBubbleDiv.className = 'message-bubble file-info-bubble';
+
+    const fileInfoDiv = document.createElement('div');
+    fileInfoDiv.className = 'file-info-content';
+
+    fileNames.forEach(fileName => {
+      const fileItem = document.createElement('div');
+      fileItem.className = 'file-info-item';
+
+      // 根据文件扩展名选择图标
+      const ext = fileName.split('.').pop().toLowerCase();
+      let iconName = 'file';
+      if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(ext)) {
+        iconName = 'image';
+      } else if (['pdf'].includes(ext)) {
+        iconName = 'file-text';
+      } else if (['doc', 'docx'].includes(ext)) {
+        iconName = 'file-text';
+      } else if (['xls', 'xlsx'].includes(ext)) {
+        iconName = 'file-spreadsheet';
+      } else if (['mp4', 'avi', 'mov', 'webm'].includes(ext)) {
+        iconName = 'file-video';
+      } else if (['mp3', 'wav', 'ogg'].includes(ext)) {
+        iconName = 'file-audio';
+      } else if (['zip', 'rar', '7z', 'tar', 'gz'].includes(ext)) {
+        iconName = 'file-archive';
+      }
+
+      fileItem.innerHTML = `
+        <i data-lucide="${iconName}" class="file-info-icon"></i>
+        <span class="file-info-name">${escapeHtml(fileName)}</span>
+      `;
+      fileInfoDiv.appendChild(fileItem);
+    });
+
+    fileBubbleDiv.appendChild(fileInfoDiv);
+    contentDiv.appendChild(fileBubbleDiv);
+  }
 
   // 添加图片
   if (images && images.length > 0) {
