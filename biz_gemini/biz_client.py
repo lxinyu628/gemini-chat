@@ -334,7 +334,7 @@ class BizGeminiClient:
         page_size: int = 110,
         page_token: str = "",
         order_by: str = "update_time desc",
-        filter_str: str = 'display_name != "" AND (NOT labels:hidden-from-ui-history)',
+        filter_str: str = "",
     ) -> dict:
         """获取会话列表（对接 Google 官方接口）
 
@@ -354,9 +354,11 @@ class BizGeminiClient:
                 "pageSize": page_size,
                 "pageToken": page_token,
                 "orderBy": order_by,
-                "filter": filter_str,
             },
         }
+
+        if filter_str:
+            body["listSessionsRequest"]["filter"] = filter_str
 
         for attempt in range(2):
             jwt = self.jwt_manager.get_jwt()
