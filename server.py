@@ -203,6 +203,7 @@ class ChatRequest(BaseModel):
     stream: bool = False
     session_id: Optional[str] = None
     session_name: Optional[str] = None
+    file_ids: Optional[List[str]] = None
     include_image_data: bool = True
     include_thoughts: bool = False  # 是否返回思考链
     embed_images_in_content: bool = True  # 是否将图片内嵌到 content（OpenAI 兼容模式）
@@ -1125,16 +1126,47 @@ async def chat_completions(
 
     # 获取待发送的文件 ID
     pending_file_ids = session_data.get("pending_file_ids", [])
+    # 合并前端显式传入的 file_ids，避免因本地缓存丢失而未携带文件
+    combined_file_ids: list[str] = []
+    if pending_file_ids:
+        combined_file_ids.extend(pending_file_ids)
+    if request.file_ids:
+        for fid in request.file_ids:
+            if fid and fid not in combined_file_ids:
+                combined_file_ids.append(fid)
     logger.debug(f"聊天请求: session_id={session_id}, canonical_session_id={canonical_session_id}, session_name={session_data.get('session_name')}, pending_file_ids={pending_file_ids}")
+
+    # 获取文件元数据用于渲染
+    attachment_metadata: List[Dict[str, Any]] = []
+    if combined_file_ids:
+        try:
+            session_name_for_files = session_data.get("session_name")
+            metadata_map = session_data["biz_client"]._get_session_file_metadata(session_name_for_files, filter_str="") if session_name_for_files else {}
+            for fid in combined_file_ids:
+                meta = metadata_map.get(fid, {}) if metadata_map else {}
+                attachment_metadata.append({
+                    "file_id": fid,
+                    "file_name": meta.get("name") or meta.get("fileId") or fid,
+                    "mime_type": meta.get("mimeType"),
+                    "byte_size": meta.get("byteSize"),
+                    "token_count": meta.get("tokenCount"),
+                    "download_uri": meta.get("downloadUri"),
+                })
+        except Exception as e:
+            logger.warning(f"获取文件元数据失败: {e}")
+            attachment_metadata = [{"file_id": fid} for fid in pending_file_ids]
 
     # 保存用户消息
     user_message = request.messages[-1] if request.messages else None
     if user_message:
-        session_data["messages"].append({
+        user_msg_data = {
             "role": user_message.role,
             "content": user_message.content,
             "timestamp": time.time(),
-        })
+        }
+        if attachment_metadata:
+            user_msg_data["attachments"] = attachment_metadata
+        session_data["messages"].append(user_msg_data)
         # 更新会话标题（使用第一条消息）
         if len(session_data["messages"]) == 1:
             title = user_message.content[:30]
@@ -1148,7 +1180,7 @@ async def chat_completions(
         async def generate():
             try:
                 # 传递 file_ids 并在发送后清空
-                file_ids_to_send = pending_file_ids.copy()
+                file_ids_to_send = combined_file_ids.copy()
                 session_data["pending_file_ids"] = []
 
                 response = client.chat.completions.create(
@@ -1204,7 +1236,7 @@ async def chat_completions(
     else:
         try:
             # 传递 file_ids 并在发送后清空
-            file_ids_to_send = pending_file_ids.copy()
+            file_ids_to_send = combined_file_ids.copy()
             session_data["pending_file_ids"] = []
 
             response = client.chat.completions.create(
