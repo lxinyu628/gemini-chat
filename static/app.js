@@ -1200,7 +1200,7 @@ function appendMessage(role, content, images = null, thinking = null, errorInfo 
     if (errorInfo.detail) {
       const errorDetail = document.createElement('div');
       errorDetail.className = 'error-message-detail';
-      errorDetail.textContent = `（原因: ${errorInfo.detail}）`;
+      errorDetail.textContent = errorInfo.detail;
       errorContainer.appendChild(errorDetail);
     }
 

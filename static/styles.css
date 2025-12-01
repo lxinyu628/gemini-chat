@@ -93,7 +93,7 @@ body {
 .new-chat-btn {
   width: 100%;
   padding: 6px 12px;
-  font-size: .875rem;
+  font-size: 0.875rem;
   border: none;
   background-color: transparent;
   cursor: pointer;
@@ -105,14 +105,13 @@ body {
 }
 
 .new-chat-btn:hover {
-  background-color:
-    color-mix(in srgb, #d3e3fd 80%, transparent);
+  background-color: color-mix(in srgb, #d3e3fd 80%, transparent);
   color: #0842a0;
   border-radius: var(--radius-lg);
 }
 
 .new-chat-btn svg {
-  font-size: .875rem;
+  font-size: 0.875rem;
   width: 20px;
   height: 20px;
 }
@@ -120,7 +119,7 @@ body {
 .conversation-list-header {
   padding: 8px 24px;
   color: var(--text-primary);
-  font-size: .875rem;
+  font-size: 0.875rem;
 }
 
 .conversations-list {
@@ -436,18 +435,6 @@ body {
 }
 
 /* 错误消息气泡 */
-.message-bubble.error-bubble {
-  background: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  border-radius: 4px 26px 26px 26px;
-  padding: 12px 16px;
-}
-
-[data-theme="dark"] .message-bubble.error-bubble {
-  background: var(--bg-tertiary);
-  border-color: var(--border-color);
-}
-
 .error-message-container {
   display: flex;
   flex-direction: column;
@@ -479,6 +466,7 @@ body {
   color: var(--text-secondary);
   line-height: 1.5;
   margin-left: 28px;
+  font-style: italic;
 }
 
 .message-text {
@@ -578,7 +566,6 @@ body {
 }
 
 @keyframes typing {
-
   0%,
   60%,
   100% {
