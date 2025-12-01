@@ -380,7 +380,15 @@ class BizGeminiClient:
                     f"获取会话列表失败: {resp.status_code} {resp.text[:200]}"
                 )
 
-            return resp.json()
+            data = resp.json()
+            sessions = data.get("listSessionsResponse", {}).get("sessions", [])
+            logger.debug(
+                f"list_sessions response count={len(sessions)}, status={resp.status_code}, "
+                f"group_id={self.group_id}, filter={'<empty>' if not filter_str else filter_str}"
+            )
+            if not sessions:
+                logger.debug(f"list_sessions raw response: {json.dumps(data, ensure_ascii=False)[:500]}")
+            return data
 
         raise RuntimeError("多次尝试获取会话列表失败（可能是 cookie 失效，需要重新登录）。")
 
