@@ -1279,22 +1279,60 @@ function appendMessage(role, content, images = null, thinking = null, errorInfo 
       const item = document.createElement('div');
       item.className = 'attachment-item';
 
+      // 根据文件名或 MIME 类型选择图标
+      const fileName = att.file_name || att.name || att.file_id || '未命名文件';
+      const mime = att.mime_type || att.mimeType || '';
+      const ext = fileName.split('.').pop().toLowerCase();
+      let iconName = 'file';
+      if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(ext) || mime.startsWith('image/')) {
+        iconName = 'image';
+      } else if (['pdf'].includes(ext) || mime === 'application/pdf') {
+        iconName = 'file-text';
+      } else if (['doc', 'docx'].includes(ext) || mime.includes('word')) {
+        iconName = 'file-type';
+      } else if (['xls', 'xlsx'].includes(ext) || mime.includes('spreadsheet') || mime.includes('excel')) {
+        iconName = 'file-spreadsheet';
+      } else if (['ppt', 'pptx'].includes(ext) || mime.includes('presentation') || mime.includes('powerpoint')) {
+        iconName = 'presentation';
+      } else if (['mp4', 'avi', 'mov', 'webm', 'mkv'].includes(ext) || mime.startsWith('video/')) {
+        iconName = 'file-video';
+      } else if (['mp3', 'wav', 'ogg', 'flac', 'aac'].includes(ext) || mime.startsWith('audio/')) {
+        iconName = 'file-audio';
+      } else if (['zip', 'rar', '7z', 'tar', 'gz'].includes(ext) || mime.includes('zip') || mime.includes('compressed')) {
+        iconName = 'file-archive';
+      } else if (['txt', 'md', 'json', 'xml', 'csv'].includes(ext) || mime.startsWith('text/')) {
+        iconName = 'file-text';
+      } else if (['js', 'ts', 'py', 'java', 'c', 'cpp', 'h', 'css', 'html', 'jsx', 'tsx'].includes(ext)) {
+        iconName = 'file-code';
+      }
+
+      // 创建图标元素
+      const iconEl = document.createElement('i');
+      iconEl.setAttribute('data-lucide', iconName);
+      iconEl.className = 'attachment-icon';
+
+      // 创建信息容器
+      const infoEl = document.createElement('div');
+      infoEl.className = 'attachment-info';
+
       const nameEl = document.createElement('div');
       nameEl.className = 'attachment-name';
-      nameEl.textContent = att.file_name || att.name || att.file_id || '未命名文件';
+      nameEl.textContent = fileName;
 
       const metaEl = document.createElement('div');
       metaEl.className = 'attachment-meta';
-      const mime = att.mime_type || att.mimeType || '未知类型';
+      const mimeDisplay = mime || '未知类型';
       const sizeVal = att.byte_size ?? att.size;
-      const metaParts = [mime];
+      const metaParts = [mimeDisplay];
       if (sizeVal) {
         metaParts.push(formatFileSize(sizeVal));
       }
       metaEl.textContent = metaParts.join(' · ');
 
-      item.appendChild(nameEl);
-      item.appendChild(metaEl);
+      infoEl.appendChild(nameEl);
+      infoEl.appendChild(metaEl);
+      item.appendChild(iconEl);
+      item.appendChild(infoEl);
       attachmentsDiv.appendChild(item);
     });
 

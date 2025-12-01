@@ -955,17 +955,33 @@ async def get_session_messages(session_id: str, session_name: Optional[str] = No
         messages = []
         # 收集所有图片的 fileId，稍后批量获取元数据
         all_file_ids = []
+        # 收集所有用户上传文件的 sessionContextFileId
+        all_context_file_ids = []
 
         for turn in turns:
             # 解析用户消息
             query = turn.get("query", {})
             query_text = query.get("text", "")
-            if query_text:
-                messages.append({
+
+            # 收集用户消息中的 contextFiles
+            context_files = query.get("contextFiles", [])
+            turn_context_file_ids = []
+            for cf in context_files:
+                file_id = cf.get("sessionContextFileId")
+                if file_id:
+                    turn_context_file_ids.append(file_id)
+                    all_context_file_ids.append(file_id)
+
+            if query_text or turn_context_file_ids:
+                user_msg = {
                     "role": "user",
                     "content": query_text,
                     "timestamp": turn.get("createdAt", ""),
-                })
+                }
+                # 暂存 contextFileIds，稍后填充完整元数据
+                if turn_context_file_ids:
+                    user_msg["_context_file_ids"] = turn_context_file_ids
+                messages.append(user_msg)
 
             # 解析 AI 回复 - 优先使用 detailedAssistAnswer
             detailed_answer = turn.get("detailedAssistAnswer", {})
@@ -1030,8 +1046,8 @@ async def get_session_messages(session_id: str, session_name: Optional[str] = No
                     "skipped_reasons": detailed_answer.get("assistSkippedReasons") or [],
                 })
 
-        # 批量获取图片元数据并更新 messages
-        if all_file_ids and full_session_name:
+        # 批量获取文件元数据并更新 messages（包括图片和用户上传的附件）
+        if (all_file_ids or all_context_file_ids) and full_session_name:
             try:
                 file_metadata = biz_client._get_session_file_metadata(full_session_name)
 
@@ -1039,8 +1055,9 @@ async def get_session_messages(session_id: str, session_name: Optional[str] = No
                 # 格式: projects/.../sessions/17970885850102128104
                 api_session_id = full_session_name.split("/")[-1] if "/" in full_session_name else session_id
 
-                # 更新每条消息中的图片信息
+                # 更新每条消息中的图片信息和附件信息
                 for msg in messages:
+                    # 处理 AI 回复中的图片
                     if "images" in msg:
                         enriched_images = []
                         for img_info in msg["images"]:
@@ -1069,8 +1086,42 @@ async def get_session_messages(session_id: str, session_name: Optional[str] = No
                             enriched_images.append(enriched_img)
 
                         msg["images"] = enriched_images
+
+                    # 处理用户消息中的附件（contextFiles）
+                    if "_context_file_ids" in msg:
+                        attachments = []
+                        for file_id in msg["_context_file_ids"]:
+                            meta = file_metadata.get(file_id, {})
+                            if meta:
+                                attachments.append({
+                                    "file_id": file_id,
+                                    "file_name": meta.get("name") or file_id,
+                                    "mime_type": meta.get("mimeType"),
+                                    "byte_size": meta.get("byteSize"),
+                                    "token_count": meta.get("tokenCount"),
+                                })
+                            else:
+                                # 元数据中没有找到，只保留 file_id
+                                attachments.append({
+                                    "file_id": file_id,
+                                    "file_name": file_id,
+                                })
+                        if attachments:
+                            msg["attachments"] = attachments
+                        # 删除临时字段
+                        del msg["_context_file_ids"]
+
             except Exception as e:
-                logger.warning(f"获取图片元数据失败: {e}")
+                logger.warning(f"获取文件元数据失败: {e}")
+                # 清理临时字段
+                for msg in messages:
+                    if "_context_file_ids" in msg:
+                        del msg["_context_file_ids"]
+
+        # 清理可能残留的临时字段（如果没有进入上面的 if 块）
+        for msg in messages:
+            if "_context_file_ids" in msg:
+                del msg["_context_file_ids"]
 
         return {"messages": messages}
 
