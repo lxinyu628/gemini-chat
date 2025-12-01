@@ -378,75 +378,8 @@ def _get_jwt_via_api(config: Optional[dict] = None) -> dict:
 
     proxy = get_proxy(config)
 
-    # 使用 _build_cookie_header 构造 Cookie（优先使用 cookie_raw）
-    cookie_str, _ = _build_cookie_header(config)
-    # 备份一个精简版 cookie，避免携带过多无关字段导致 refreshcookies
-    minimal_cookie_str = None
-    if secure_c_ses:
-        minimal_cookie_str = f"__Secure-C_SES={secure_c_ses}"
-        if config.get("host_c_oses"):
-            minimal_cookie_str += f"; __Host-C_OSES={config['host_c_oses']}"
-        if config.get("nid"):
-            minimal_cookie_str += f"; NID={config['nid']}"
-
-    url = f"{GETOXSRF_URL}?csesidx={csesidx}"
-
-    # 构建 httpx 客户端参数，proxy=None 时不传该参数
-    client_kwargs = {
-        "verify": False,
-        "follow_redirects": False,
-        "timeout": 30.0,
-    }
-    if proxy:
-        client_kwargs["proxy"] = proxy
-
-    headers = {
-        "accept": "*/*",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        # 保持与浏览器一致，避免被重定向到 refreshcookies
-        "origin": "https://business.gemini.google",
-        "referer": "https://business.gemini.google/",
-        "sec-fetch-dest": "empty",
-        "sec-fetch-mode": "cors",
-        "sec-fetch-site": "same-site",
-        "cookie": cookie_str,
-    }
-
-    cookies_dict = _parse_cookie_str(cookie_str)
-
-    def _do_get(cookie_header: str) -> httpx.Response:
-        # 独立函数，便于多次尝试
-        return httpx.Client(**client_kwargs, cookies=_parse_cookie_str(cookie_header)).get(
-            url,
-            headers={**headers, "cookie": cookie_header},
-        )
-
-    with httpx.Client(**client_kwargs, cookies=cookies_dict) as client:
-        resp = client.get(url, headers=headers)
-
-        # 处理 302 重定向到 refreshcookies
-        if resp.status_code == 302:
-            location = resp.headers.get("location", "")
-            if "refreshcookies" in location.lower():
-                logger.info("检测到 refreshcookies 重定向，尝试跟随...")
-                # 跟随重定向刷新 Cookie
-                resp2 = client.get(location, headers=headers, follow_redirects=True)
-                if resp2.status_code in (200, 204, 302, 303):
-                    # 刷新成功，重新请求 getoxsrf
-                    logger.info(f"Cookie 刷新完成 (HTTP {resp2.status_code})，重新请求 getoxsrf")
-                    resp = client.get(url, headers=headers)
-                else:
-                    logger.warning(f"refreshcookies 请求失败: HTTP {resp2.status_code}")
-            else:
-                logger.debug(f"getoxsrf 302 跳转到 {location}")
-
-        # 如果仍然是 302，尝试使用精简版 cookie 重新请求（去掉杂项 cookie）
-        if resp.status_code == 302 and minimal_cookie_str and minimal_cookie_str != cookie_str:
-            try:
-                logger.info("getoxsrf 仍返回 302，改用精简 cookie 重新请求")
-                resp = _do_get(minimal_cookie_str)
-            except Exception as e:  # noqa: BLE001
-                logger.debug(f"精简 cookie 重试失败: {e}")
+    # 调用 getoxsrf（带 refreshcookies 跟随与精简 cookie 回退）
+    resp, _debug = request_getoxsrf(config, allow_minimal_retry=True)
 
     # 检查 HTTP 状态码
     if resp.status_code != 200:
@@ -476,6 +409,96 @@ def _get_jwt_via_api(config: Optional[dict] = None) -> dict:
         "key_id": key_id,
         "expires_at_ts": exp_ts,
     }
+
+
+def request_getoxsrf(config: Optional[dict] = None, allow_minimal_retry: bool = True) -> tuple[httpx.Response, dict]:
+    """执行 getoxsrf 请求，内建 refreshcookies 跟随与精简 cookie 回退。"""
+    if config is None:
+        config = load_config()
+
+    secure_c_ses = config.get("secure_c_ses")
+    csesidx = config.get("csesidx")
+    if not secure_c_ses or not csesidx:
+        raise ValueError("缺少 secure_c_ses / csesidx，请先运行 `python app.py login`")
+
+    proxy = get_proxy(config)
+
+    # 使用 _build_cookie_header 构造 Cookie（优先使用 cookie_raw）
+    cookie_str, cookie_debug = _build_cookie_header(config)
+
+    # 精简版 cookie，避免携带无关字段触发 refreshcookies
+    minimal_cookie_str = None
+    if secure_c_ses:
+        minimal_cookie_str = f"__Secure-C_SES={secure_c_ses}"
+        if config.get("host_c_oses"):
+            minimal_cookie_str += f"; __Host-C_OSES={config['host_c_oses']}"
+        if config.get("nid"):
+            minimal_cookie_str += f"; NID={config['nid']}"
+
+    url = f"{GETOXSRF_URL}?csesidx={csesidx}"
+
+    client_kwargs = {
+        "verify": False,
+        "follow_redirects": False,
+        "timeout": 30.0,
+    }
+    if proxy:
+        client_kwargs["proxy"] = proxy
+
+    headers_base = {
+        "accept": "*/*",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "origin": "https://business.gemini.google",
+        "referer": "https://business.gemini.google/",
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-site",
+    }
+
+    def _send_with_refresh(client: httpx.Client, cookie_header: str) -> httpx.Response:
+        headers = {**headers_base, "cookie": cookie_header}
+        resp = client.get(url, headers=headers)
+        if resp.status_code == 302:
+            location = resp.headers.get("location", "")
+            if "refreshcookies" in location.lower():
+                logger.info("检测到 refreshcookies 重定向，尝试跟随")
+                resp_refresh = client.get(location, headers=headers_base, follow_redirects=True)
+                if resp_refresh.status_code in (200, 204, 302, 303):
+                    resp = client.get(url, headers=headers)
+                else:
+                    logger.warning(f"refreshcookies 请求失败: HTTP {resp_refresh.status_code}")
+        return resp
+
+    used_cookie_header = cookie_str
+    used_variant = cookie_debug.get("cookie_source", "cookie_raw")
+
+    with httpx.Client(**client_kwargs) as client:
+        resp = _send_with_refresh(client, cookie_str)
+
+        # 若仍是 302，尝试精简 cookie
+        if (
+            allow_minimal_retry
+            and resp.status_code == 302
+            and minimal_cookie_str
+            and minimal_cookie_str != cookie_str
+        ):
+            logger.info("getoxsrf 返回 302，改用精简 cookie 再试")
+            alt_resp = _send_with_refresh(client, minimal_cookie_str)
+            resp = alt_resp
+            used_cookie_header = minimal_cookie_str
+            used_variant = "minimal"
+
+    debug_info = {
+        "cookie_source": cookie_debug.get("cookie_source"),
+        "cookie_header_length": len(used_cookie_header),
+        "cookie_header_preview": used_cookie_header[:100] + "..." if len(used_cookie_header) > 100 else used_cookie_header,
+        "used_cookie_variant": used_variant,
+        "status_code": resp.status_code,
+        "location": resp.headers.get("location"),
+        "proxy_used": proxy,
+    }
+
+    return resp, debug_info
 
 
 # JWT 有效期阈值（秒），超过此时间需要刷新
