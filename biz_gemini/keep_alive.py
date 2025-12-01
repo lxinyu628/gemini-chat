@@ -201,8 +201,14 @@ class KeepAliveService:
             self._last_error = str(e)
             error_msg = str(e)
 
-            # 检查是否是 session 过期
-            if "expired" in error_msg.lower() or "401" in error_msg or "403" in error_msg:
+            # 检查是否是 session 过期或需要刷新 cookie
+            if (
+                "expired" in error_msg.lower()
+                or "401" in error_msg
+                or "403" in error_msg
+                or "302" in error_msg
+                or "refreshcookies" in error_msg.lower()
+            ):
                 logger.warning("Session 已过期，需要重新登录")
                 self._session_valid = False
                 self._cookie_expired = True

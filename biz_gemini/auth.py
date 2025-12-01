@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import json
 import time
+from http.cookies import SimpleCookie
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, Optional
@@ -127,6 +128,13 @@ def _build_cookie_header(config: dict) -> tuple[str, dict]:
         }
 
     return cookie_str, debug_info
+
+
+def _parse_cookie_str(cookie_str: str) -> Dict[str, str]:
+    """将原始 Cookie 字符串解析为字典，便于 httpx CookieJar 使用。"""
+    jar = SimpleCookie()
+    jar.load(cookie_str)
+    return {k: morsel.value for k, morsel in jar.items()}
 
 
 def check_session_status(config: Optional[dict] = None) -> dict:
@@ -387,10 +395,18 @@ def _get_jwt_via_api(config: Optional[dict] = None) -> dict:
     headers = {
         "accept": "*/*",
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        # 保持与浏览器一致，避免被重定向到 refreshcookies
+        "origin": "https://business.gemini.google",
+        "referer": "https://business.gemini.google/",
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-site",
         "cookie": cookie_str,
     }
 
-    with httpx.Client(**client_kwargs) as client:
+    cookies_dict = _parse_cookie_str(cookie_str)
+
+    with httpx.Client(**client_kwargs, cookies=cookies_dict) as client:
         resp = client.get(url, headers=headers)
 
         # 处理 302 重定向到 refreshcookies
@@ -406,6 +422,8 @@ def _get_jwt_via_api(config: Optional[dict] = None) -> dict:
                     resp = client.get(url, headers=headers)
                 else:
                     logger.warning(f"refreshcookies 请求失败: HTTP {resp2.status_code}")
+            else:
+                logger.debug(f"getoxsrf 302 跳转到 {location}")
 
     # 检查 HTTP 状态码
     if resp.status_code != 200:
