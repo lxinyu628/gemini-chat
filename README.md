@@ -25,7 +25,14 @@
 
 ```bash
 # 克隆项目（或下载项目文件）
+# 稳定版（推荐）：
 git clone https://github.com/ccpopy/gemini-chat.git
+cd gemini-chat
+
+# 开发版（beta 分支）：
+# ⚠️ 警告：beta 分支包含最新的开发功能，但可能存在不稳定性和未修复的 bug
+# 仅建议开发者或测试用户使用
+git clone -b beta https://github.com/ccpopy/gemini-chat.git
 cd gemini-chat
 
 # 创建虚拟环境
@@ -60,18 +67,19 @@ vim config.json
 ```
 
 **配置说明**：
+
 ```json
 {
   "server": {
-    "host": "0.0.0.0",      // 绑定地址
-    "port": 8000,           // 绑定端口
-    "workers": 4,           // Worker 进程数
-    "log_level": "INFO"     // 日志级别
+    "host": "0.0.0.0", // 绑定地址
+    "port": 8000, // 绑定端口
+    "workers": 4, // Worker 进程数
+    "log_level": "INFO" // 日志级别
   },
   "proxy": {
-    "enabled": true,        // 是否启用代理
-    "url": "socks5h://127.0.0.1:10808",  // 代理地址
-    "timeout": 30           // 代理超时（秒）
+    "enabled": true, // 是否启用代理
+    "url": "socks5h://127.0.0.1:10808", // 代理地址
+    "timeout": 30 // 代理超时（秒）
   },
   "session": {
     // 登录后自动填充，无需手动配置
@@ -120,6 +128,7 @@ chmod +x manage.sh        # 赋予执行权限（首次）
 ### 5. 访问服务
 
 启动后访问：
+
 - **Web 界面**: http://localhost:8000
 - **API 端点**: http://localhost:8000/v1/chat/completions
 - **API 文档**: http://localhost:8000/docs
@@ -133,6 +142,7 @@ POST /v1/chat/completions
 ```
 
 示例请求：
+
 ```bash
 curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
@@ -227,10 +237,12 @@ vim .env
 服务支持配置热重载，修改 `config.json` 后：
 
 **自动重载**（推荐）:
+
 - 保存文件后会自动检测并重载配置
 - 新配置会在下次请求时生效
 
 **手动重载**:
+
 ```bash
 # Linux/Mac
 ./manage.sh reload
@@ -253,6 +265,7 @@ curl -X POST http://localhost:8000/api/config/reload
 5. 登录成功后会自动更新配置
 
 或通过 API：
+
 ```bash
 # 启动登录（headless 模式）
 curl -X POST http://localhost:8000/api/login/start?headless=true
@@ -264,10 +277,12 @@ curl http://localhost:8000/api/login/status
 ## 日志
 
 日志文件位于 `log/` 目录：
+
 - `access.log` - 访问日志
 - `error.log` - 错误日志
 
 查看实时日志：
+
 ```bash
 # Linux/Mac
 ./manage.sh logs [access|error]
@@ -284,12 +299,14 @@ tail -f log/error.log
 ### 1. 启动失败
 
 检查依赖是否完整：
+
 ```bash
 pip install -r requirements.txt
 playwright install chromium
 ```
 
 查看错误日志：
+
 ```bash
 cat log/error.log
 ```
@@ -303,6 +320,7 @@ cat log/error.log
 ### 3. 代理问题
 
 编辑 `config.json`，设置 `proxy.enabled` 为 `false` 以禁用代理：
+
 ```json
 {
   "proxy": {
@@ -349,6 +367,7 @@ playwright install chromium
 ```
 
 验证安装是否成功：
+
 ```bash
 python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(headless=True); print('OK'); b.close(); p.stop()"
 ```
@@ -365,6 +384,7 @@ HTTP 401
 **重新登录方法**：
 
 **方式 A：远程浏览器登录（推荐）**
+
 1. 打开 Web 界面
 2. 点击左下角状态指示器
 3. 选择"远程浏览器"标签，点击"启动浏览器"
@@ -372,11 +392,13 @@ HTTP 401
 5. 登录成功后点击"保存配置"
 
 **方式 B：手动输入 Cookie**
+
 1. 在本地有图形界面的电脑上运行 `python app.py login`
 2. 登录成功后，复制 `config.json` 中的 `session` 部分
 3. 在 Web 界面选择"手动输入"标签，粘贴相关信息
 
 **方式 C：命令行登录（需要图形界面）**
+
 ```bash
 python app.py login
 ```
@@ -386,6 +408,7 @@ python app.py login
 如果 WebSocket 连接后立即断开（日志显示 `connection open` 后马上 `connection closed`），通常是 Playwright 浏览器启动失败。
 
 检查步骤：
+
 1. 确认 Chromium 已安装：`playwright install chromium`
 2. 检查系统依赖是否完整（见上方 Ubuntu 24.04 部分）
 3. 手动测试浏览器启动：
@@ -406,18 +429,22 @@ uvicorn server:app --reload --host 0.0.0.0 --port 8000
 ## 生产部署建议
 
 1. **使用 Gunicorn**（推荐）
+
    - 脚本会自动使用 Gunicorn 如果已安装
    - 多 worker 支持，提高并发性能
 
 2. **反向代理**
+
    - 建议使用 Nginx 作为反向代理
    - 配置 SSL/TLS 证书
 
 3. **进程管理**
+
    - Linux 可使用 systemd 管理服务
    - 或使用 supervisor
 
 4. **日志轮转**
+
    - 配置 logrotate 防止日志文件过大
 
 5. **监控**

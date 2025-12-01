@@ -915,6 +915,31 @@ async def get_session_messages(session_id: str, session_name: Optional[str] = No
         # 获取完整的 session name（用于构造图片下载 URL）
         full_session_name = session_data.get("name", "")
 
+        def build_skipped_message(detailed_answer: dict) -> Optional[str]:
+            """构造跳过回复时的提示文案"""
+            state = detailed_answer.get("state")
+            reasons = detailed_answer.get("assistSkippedReasons") or []
+            if state != "SKIPPED":
+                return None
+
+            # 组织自定义策略阻断
+            if "CUSTOMER_POLICY_VIOLATION" in reasons:
+                violation_detail = None
+                policy_result = detailed_answer.get("customerPolicyEnforcementResult") or {}
+                for pr in policy_result.get("policyResults") or []:
+                    armor_result = pr.get("modelArmorEnforcementResult") or {}
+                    violation_detail = armor_result.get("modelArmorViolation")
+                    if violation_detail:
+                        break
+
+                suffix = f"（原因: {violation_detail}）" if violation_detail else ""
+                return f"由于提示违反了您组织定义的安全政策，因此 Gemini Enterprise 无法回复。{suffix}"
+
+            if reasons:
+                return f"Gemini Enterprise 未能生成回复（原因: {', '.join(reasons)}）"
+
+            return "Gemini Enterprise 未能生成回复（状态: SKIPPED）"
+
         messages = []
         # 收集所有图片的 fileId，稍后批量获取元数据
         all_file_ids = []
@@ -933,6 +958,8 @@ async def get_session_messages(session_id: str, session_name: Optional[str] = No
             # 解析 AI 回复 - 优先使用 detailedAssistAnswer
             detailed_answer = turn.get("detailedAssistAnswer", {})
             replies = detailed_answer.get("replies", [])
+
+            skipped_message = None if replies else build_skipped_message(detailed_answer)
 
             if replies:
                 # 分别收集文本、思考和图片
@@ -981,6 +1008,14 @@ async def get_session_messages(session_id: str, session_name: Optional[str] = No
                         msg_data["images"] = turn_file_ids
 
                     messages.append(msg_data)
+            elif skipped_message:
+                messages.append({
+                    "role": "assistant",
+                    "content": skipped_message,
+                    "timestamp": turn.get("createdAt", ""),
+                    "skipped": True,
+                    "skipped_reasons": detailed_answer.get("assistSkippedReasons") or [],
+                })
 
         # 批量获取图片元数据并更新 messages
         if all_file_ids and full_session_name:

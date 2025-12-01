@@ -1004,81 +1004,98 @@ async function sendMessage() {
       body: JSON.stringify({
         model: state.currentModel,
         messages: [{ role: 'user', content: finalMessage }],
-        stream: false,
+        stream: true,
         session_id: state.currentConversationId,
         session_name: state.currentSessionName,
         include_image_data: true
       })
     });
 
+    if (!response.ok) {
+      removeTypingIndicator(loadingId);
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || error.message || '请求失败');
+    }
+
+    // 移除加载提示，准备渲染流式内容
     removeTypingIndicator(loadingId);
 
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.detail || '请求失败');
-    }
+    // 预创建助手消息占位
+    const assistantMsgDiv = appendMessage('assistant', '');
+    const textEl = assistantMsgDiv.querySelector('.message-text');
 
-    const data = await response.json();
+    const decoder = new TextDecoder();
+    const reader = response.body.getReader();
+    let buffer = '';
+    let fullText = '';
+    let imagesData = null;
+    let done = false;
 
-    // 用响应中的 canonical session_id/session_name 更新 state（避免刷新后 ID 不匹配）
-    if (data.session_id && data.session_id !== state.currentConversationId) {
-      console.log('[DEBUG] 更新 session_id:', state.currentConversationId, '->', data.session_id);
-      state.currentConversationId = data.session_id;
-    }
-    if (data.session_name) {
-      state.currentSessionName = data.session_name;
-    }
+    const appendStreamChunk = (dataStr) => {
+      if (dataStr === '[DONE]') {
+        done = true;
+        return;
+      }
+      let payload = null;
+      try {
+        payload = JSON.parse(dataStr);
+      } catch (e) {
+        console.warn('流数据解析失败:', dataStr);
+        return;
+      }
 
-    const rawContent = data.choices[0].message.content;
+      if (payload.error) {
+        throw new Error(payload.error.message || '请求失败');
+      }
 
-    // 处理 content 可能是数组或字符串的情况
-    let textContent = '';
-    let inlineImages = [];
+      const delta = payload.choices?.[0]?.delta || {};
+      const deltaContent = delta.content || '';
 
-    if (Array.isArray(rawContent)) {
-      // content 是数组格式 [{type: "text", text: "..."}, {type: "image_url", image_url: {...}}]
-      rawContent.forEach(item => {
-        if (item.type === 'text' && item.text) {
-          textContent += item.text;
-        } else if (item.type === 'image_url' && item.image_url) {
-          inlineImages.push({
-            url: item.image_url.url
-          });
+      if (deltaContent) {
+        fullText += deltaContent;
+        if (textEl) {
+          textEl.textContent = fullText;
         }
-      });
-    } else {
-      // content 是字符串
-      textContent = rawContent;
+      }
+
+      if (payload.images) {
+        imagesData = payload.images;
+      }
+    };
+
+    while (true) {
+      const { value, done: streamDone } = await reader.read();
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !streamDone });
+
+      let idx;
+      while ((idx = buffer.indexOf('\n\n')) !== -1) {
+        const rawEvent = buffer.slice(0, idx).trim();
+        buffer = buffer.slice(idx + 2);
+        if (!rawEvent.startsWith('data:')) continue;
+        const dataStr = rawEvent.slice(5).trim();
+        if (!dataStr) continue;
+        appendStreamChunk(dataStr);
+      }
+
+      if (streamDone) break;
+      if (done) break;
     }
 
-    // 合并 inline images 和 response images
-    let allImages = [...inlineImages];
-    if (data.images && data.images.length > 0) {
-      data.images.forEach(img => {
-        // 处理 images 数组中的图片，优先使用 local_path 通过服务器代理访问
-        if (img.local_path) {
-          allImages.push({
-            url: `/api/images/${encodeURIComponent(img.file_name || img.file_id)}`
-          });
-        } else if (img.download_uri) {
-          allImages.push({ url: img.download_uri });
-        }
-      });
+    // 流结束后渲染最终 Markdown
+    if (textEl) {
+      textEl.innerHTML = renderMarkdown(fullText);
+      addCodeCopyButtons(textEl);
     }
 
-    // 获取思考链内容（如果有）
-    let thinkingContent = null;
-    const message = data.choices[0].message;
-    if (message.thoughts && Array.isArray(message.thoughts)) {
-      // thoughts 是数组，合并为字符串
-      thinkingContent = message.thoughts.join('\n');
-    } else if (message.thinking) {
-      thinkingContent = message.thinking;
-    } else if (data.thinking) {
-      thinkingContent = data.thinking;
+    if (imagesData && imagesData.length > 0) {
+      renderImagesForMessage(assistantMsgDiv, imagesData);
     }
 
-    appendMessage('assistant', textContent, allImages, thinkingContent);
+    ensureAssistantActions(assistantMsgDiv, fullText);
+
+    if (typeof lucide !== 'undefined') {
+      lucide.createIcons({ nodes: [assistantMsgDiv] });
+    }
 
     // 更新会话列表
     await loadConversations();
@@ -1258,6 +1275,109 @@ function appendMessage(role, content, images = null, thinking = null) {
 
   elements.messagesContainer.appendChild(messageDiv);
   scrollToBottom();
+
+  if (typeof lucide !== 'undefined') {
+    lucide.createIcons({ nodes: [messageDiv] });
+  }
+
+  return messageDiv;
+}
+
+function renderImagesForMessage(messageDiv, images = []) {
+  if (!messageDiv || !images || images.length === 0) return;
+
+  const contentDiv = messageDiv.querySelector('.message-content');
+  if (!contentDiv) return;
+
+  let imagesDiv = messageDiv.querySelector('.message-images');
+  if (!imagesDiv) {
+    imagesDiv = document.createElement('div');
+    imagesDiv.className = 'message-images';
+    contentDiv.appendChild(imagesDiv);
+  } else {
+    imagesDiv.innerHTML = '';
+  }
+
+  images.forEach(img => {
+    const imgWrapper = document.createElement('div');
+    imgWrapper.className = 'message-image';
+
+    const imgElement = document.createElement('img');
+    if (img.local_path || img.file_name || img.file_id) {
+      // 优先通过后端代理访问本地缓存
+      const fileName = encodeURIComponent(img.file_name || img.file_id);
+      imgElement.src = `/api/images/${fileName}`;
+    } else if (img.download_uri) {
+      imgElement.src = img.download_uri;
+    } else if (img.url) {
+      imgElement.src = img.url;
+    } else if (img.data) {
+      imgElement.src = `data:image/png;base64,${img.data}`;
+    } else {
+      return;
+    }
+
+    imgElement.alt = 'Generated image';
+    imgWrapper.appendChild(imgElement);
+    imagesDiv.appendChild(imgWrapper);
+  });
+}
+
+function ensureAssistantActions(messageDiv, content) {
+  if (!messageDiv || !content) return;
+  if (messageDiv.querySelector('.message-actions')) return;
+
+  const contentDiv = messageDiv.querySelector('.message-content');
+  if (!contentDiv) return;
+
+  const actionsDiv = document.createElement('div');
+  actionsDiv.className = 'message-actions';
+
+  // 复制按钮
+  const copyBtn = document.createElement('button');
+  copyBtn.className = 'message-action-btn';
+  copyBtn.title = '复制';
+  copyBtn.innerHTML = `<i data-lucide="copy"></i>`;
+  copyBtn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(content);
+      copyBtn.innerHTML = `<i data-lucide="check"></i>`;
+      copyBtn.classList.add('copied');
+      setTimeout(() => {
+        copyBtn.innerHTML = `<i data-lucide="copy"></i>`;
+        copyBtn.classList.remove('copied');
+        if (typeof lucide !== 'undefined') {
+          lucide.createIcons({ nodes: [copyBtn] });
+        }
+      }, 2000);
+      if (typeof lucide !== 'undefined') {
+        lucide.createIcons({ nodes: [copyBtn] });
+      }
+    } catch (e) {
+      console.error('复制失败:', e);
+    }
+  });
+
+  // 下载按钮
+  const downloadBtn = document.createElement('button');
+  downloadBtn.className = 'message-action-btn';
+  downloadBtn.title = '下载';
+  downloadBtn.innerHTML = `<i data-lucide="download"></i>`;
+  downloadBtn.addEventListener('click', () => {
+    const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `gemini-response-${Date.now()}.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  });
+
+  actionsDiv.appendChild(copyBtn);
+  actionsDiv.appendChild(downloadBtn);
+  contentDiv.appendChild(actionsDiv);
 }
 
 function showTypingIndicator() {

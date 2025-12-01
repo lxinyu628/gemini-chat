@@ -856,6 +856,9 @@ class BizGeminiClient:
                 self._parse_generated_image(gen_img, result, auto_save_images)
 
             answer = sar.get("answer") or {}
+            answer_state = answer.get("state") or sar.get("state")
+            skipped_reasons = answer.get("assistSkippedReasons") or sar.get("assistSkippedReasons") or []
+            policy_result = answer.get("customerPolicyEnforcementResult") or sar.get("customerPolicyEnforcementResult") or {}
 
             # 检查 answer 级别的 generatedImages
             answer_gen_images = answer.get("generatedImages") or []
@@ -863,6 +866,28 @@ class BizGeminiClient:
                 self._parse_generated_image(gen_img, result, auto_save_images)
 
             replies = answer.get("replies") or []
+
+            # 处理被策略阻断的情况：无回复但 state=SKIPPED
+            if (answer_state == "SKIPPED" or skipped_reasons) and not replies:
+                violation_detail = None
+                if "CUSTOMER_POLICY_VIOLATION" in skipped_reasons:
+                    for pr in policy_result.get("policyResults") or []:
+                        armor = pr.get("modelArmorEnforcementResult") or {}
+                        violation_detail = armor.get("modelArmorViolation")
+                        if violation_detail:
+                            break
+                if "CUSTOMER_POLICY_VIOLATION" in skipped_reasons:
+                    msg = "由于提示违反了您组织定义的安全政策，因此 Gemini Enterprise 无法回复。"
+                    if violation_detail:
+                        msg += f"（原因: {violation_detail}）"
+                elif skipped_reasons:
+                    msg = f"Gemini Enterprise 未能生成回复（原因: {', '.join(skipped_reasons)}）"
+                else:
+                    msg = f"Gemini Enterprise 未能生成回复（状态: {answer_state or '未知'}）"
+
+                texts.append(msg)
+                continue
+
             for reply in replies:
                 # 检查 reply 级别的 generatedImages
                 reply_gen_images = reply.get("generatedImages") or []

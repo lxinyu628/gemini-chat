@@ -124,6 +124,10 @@ class KeepAliveService:
             # 检查是否有必要的凭证
             if not config.get("secure_c_ses") or not config.get("csesidx"):
                 logger.debug("未登录，跳过刷新")
+                self._last_check = datetime.now()
+                self._session_valid = False
+                self._cookie_expired = True
+                self._last_error = "缺少登录凭证（secure_c_ses/csesidx）"
                 return
 
             # 检查 Cookie 是否已标记为过期
@@ -131,6 +135,8 @@ class KeepAliveService:
                 logger.warning("Cookie 已标记为过期，跳过 JWT 刷新")
                 self._cookie_expired = True
                 self._session_valid = False
+                self._last_check = datetime.now()
+                self._last_error = "Cookie 已标记为过期"
 
                 # 如果启用了自动浏览器刷新，尝试刷新
                 if self.auto_browser_refresh and self._pending_refresh:
@@ -268,10 +274,19 @@ class KeepAliveService:
         """立即执行一次刷新"""
         try:
             await self._do_refresh()
+            success = (
+                self._session_valid
+                and not self._cookie_expired
+                and not self._last_error
+            )
             return {
-                "success": True,
+                "success": success,
                 "last_refresh": self._last_refresh.isoformat() if self._last_refresh else None,
-                "refresh_count": self._refresh_count
+                "last_check": self._last_check.isoformat() if self._last_check else None,
+                "refresh_count": self._refresh_count,
+                "session_valid": self._session_valid,
+                "cookie_expired": self._cookie_expired,
+                "error": self._last_error,
             }
         except Exception as e:
             return {
