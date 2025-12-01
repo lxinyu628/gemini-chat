@@ -380,6 +380,14 @@ def _get_jwt_via_api(config: Optional[dict] = None) -> dict:
 
     # 使用 _build_cookie_header 构造 Cookie（优先使用 cookie_raw）
     cookie_str, _ = _build_cookie_header(config)
+    # 备份一个精简版 cookie，避免携带过多无关字段导致 refreshcookies
+    minimal_cookie_str = None
+    if secure_c_ses:
+        minimal_cookie_str = f"__Secure-C_SES={secure_c_ses}"
+        if config.get("host_c_oses"):
+            minimal_cookie_str += f"; __Host-C_OSES={config['host_c_oses']}"
+        if config.get("nid"):
+            minimal_cookie_str += f"; NID={config['nid']}"
 
     url = f"{GETOXSRF_URL}?csesidx={csesidx}"
 
@@ -406,6 +414,13 @@ def _get_jwt_via_api(config: Optional[dict] = None) -> dict:
 
     cookies_dict = _parse_cookie_str(cookie_str)
 
+    def _do_get(cookie_header: str) -> httpx.Response:
+        # 独立函数，便于多次尝试
+        return httpx.Client(**client_kwargs, cookies=_parse_cookie_str(cookie_header)).get(
+            url,
+            headers={**headers, "cookie": cookie_header},
+        )
+
     with httpx.Client(**client_kwargs, cookies=cookies_dict) as client:
         resp = client.get(url, headers=headers)
 
@@ -424,6 +439,14 @@ def _get_jwt_via_api(config: Optional[dict] = None) -> dict:
                     logger.warning(f"refreshcookies 请求失败: HTTP {resp2.status_code}")
             else:
                 logger.debug(f"getoxsrf 302 跳转到 {location}")
+
+        # 如果仍然是 302，尝试使用精简版 cookie 重新请求（去掉杂项 cookie）
+        if resp.status_code == 302 and minimal_cookie_str and minimal_cookie_str != cookie_str:
+            try:
+                logger.info("getoxsrf 仍返回 302，改用精简 cookie 重新请求")
+                resp = _do_get(minimal_cookie_str)
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"精简 cookie 重试失败: {e}")
 
     # 检查 HTTP 状态码
     if resp.status_code != 200:
