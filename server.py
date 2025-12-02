@@ -1140,6 +1140,19 @@ async def get_session_messages(session_id: str, session_name: Optional[str] = No
                         if len(matched_plan_ts) >= 2:
                             matched_plan_ts = sorted(matched_plan_ts)
                             msg_data["thinking_duration_ms"] = (matched_plan_ts[-1] - matched_plan_ts[0]).total_seconds() * 1000
+                        elif len(matched_plan_ts) == 1 and plan_steps_detail:
+                            # 仅匹配到一个步骤时，尝试使用它之后的下一个 planStep 作为结束时间
+                            matched_ts = matched_plan_ts[0]
+                            next_ts = None
+                            sorted_steps = sorted(plan_steps_detail, key=lambda x: x["ts"] or datetime.min)
+                            for idx, ps in enumerate(sorted_steps):
+                                if ps["ts"] == matched_ts and idx + 1 < len(sorted_steps):
+                                    next_ts = sorted_steps[idx + 1]["ts"]
+                                    break
+                            if next_ts:
+                                msg_data["thinking_duration_ms"] = (next_ts - matched_ts).total_seconds() * 1000
+                            elif thinking_duration_ms is not None:
+                                msg_data["thinking_duration_ms"] = thinking_duration_ms
                         elif thinking_duration_ms is not None:
                             msg_data["thinking_duration_ms"] = thinking_duration_ms
 
