@@ -263,6 +263,7 @@ curl -X POST http://localhost:8000/api/config/reload
 3. 后台会启动 headless 浏览器
 4. 按提示完成登录流程
 5. 登录成功后会自动更新配置
+6. 如果 Cookie 失效，页面会自动弹出远程浏览器并尽量复用上一次保存的 `cookie_profile_dir`，直接在弹出的画面里选择账号完成登录即可。
 
 或通过 API：
 
@@ -425,6 +426,29 @@ python server.py
 # 或
 uvicorn server:app --reload --host 0.0.0.0 --port 8000
 ```
+
+## Docker 部署
+
+1. 准备配置：复制 `config.example.json` 为 `config.json`，按需填写代理等参数。
+2. 构建镜像：
+
+   ```bash
+   docker build -t business-gemini .
+   ```
+
+3. 运行容器（映射配置和日志目录，按需设置代理环境变量）：
+
+   ```bash
+   docker run -d --name business-gemini \
+     -p 8000:8000 \
+     -v $(pwd)/config.json:/app/config.json \
+     -v $(pwd)/log:/app/log \
+     -e PROXY_URL=socks5h://127.0.0.1:10808 \
+     business-gemini
+   ```
+
+4. 首次登录：访问 `http://localhost:8000`，过期时前端会自动弹出远程浏览器；如有 `cookie_profile_dir`，会优先复用以减少二次验证。
+5. 如果 Playwright 提示共享内存不足，可在运行参数中追加 `--shm-size=1g` 或 `--ipc=host`。
 
 ## 生产部署建议
 

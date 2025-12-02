@@ -6,7 +6,10 @@ const state = {
   currentModel: 'business-gemini',
   uploadedFiles: [],
   theme: localStorage.getItem('theme') || 'light',
-  statusCheckInterval: null
+  statusCheckInterval: null,
+  signoutUrl: null,
+  accountChooserUrl: null,
+  autoBrowserStarted: false
 };
 
 // ==================== Lucide 图标自动渲染 ====================
@@ -544,6 +547,7 @@ async function checkStatus() {
     // 保存 signout_url 到全局状态
     state.signoutUrl = data.signout_url || null;
     state.currentUsername = data.username || null;
+    state.accountChooserUrl = data.account_chooser_url || state.accountChooserUrl;
 
     // 仅在 expired 或 logged_in=false 时弹过期模态框
     // warning=true 时只提示状态异常，不弹模态
@@ -585,6 +589,8 @@ function startStatusMonitoring() {
 
 function showExpiredModal() {
   elements.expiredModal.classList.add('show');
+   openLoginModal();
+   autoStartBrowserLogin();
 }
 
 // 模型加载
@@ -1647,6 +1653,19 @@ const browserState = {
   status: 'idle'
 };
 
+function autoStartBrowserLogin() {
+  if (state.autoBrowserStarted || browserState.connected) return;
+  state.autoBrowserStarted = true;
+
+  const continueTarget = state.accountChooserUrl
+    ? null
+    : 'https://business.gemini.google/home/';
+  const fallbackUrl = `https://auth.business.gemini.google/account-chooser?continueUrl=${encodeURIComponent(continueTarget || 'https://business.gemini.google/')}`;
+  const startUrl = state.accountChooserUrl || fallbackUrl;
+
+  startBrowser({ useProfile: true, startUrl, auto: true });
+}
+
 // 打开登录模态框
 function openLoginModal() {
   document.getElementById('expiredModal').classList.remove('show');
@@ -1677,26 +1696,34 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 });
 
 // 启动远程浏览器
-document.getElementById('startBrowserBtn').addEventListener('click', startBrowser);
+document.getElementById('startBrowserBtn').addEventListener('click', () => startBrowser());
 document.getElementById('stopBrowserBtn').addEventListener('click', stopBrowser);
 
 // 手动保存配置
 document.getElementById('saveManualBtn').addEventListener('click', saveManualConfig);
 
-async function startBrowser() {
+async function startBrowser(options = {}) {
+  const { useProfile = false, startUrl = null, auto = false } = options || {};
+
+  if (browserState.connected) return;
+
   const statusDiv = document.getElementById('browserStatus');
   const containerDiv = document.getElementById('browserContainer');
   const startBtn = document.getElementById('startBrowserBtn');
   const stopBtn = document.getElementById('stopBrowserBtn');
   const inputBox = document.getElementById('browserInput');
 
-  statusDiv.innerHTML = '<p>正在连接...</p>';
+  statusDiv.innerHTML = auto ? '<p>检测到过期，正在自动启动远程浏览器...</p>' : '<p>正在连接...</p>';
   startBtn.disabled = true;
 
   try {
     // 获取 WebSocket URL
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws/browser`;
+    const params = new URLSearchParams();
+    if (useProfile) params.set('use_profile', '1');
+    if (startUrl) params.set('start_url', startUrl);
+    const qs = params.toString();
+    const wsUrl = `${protocol}//${window.location.host}/ws/browser${qs ? `?${qs}` : ''}`;
 
     browserState.ws = new WebSocket(wsUrl);
 
@@ -1713,6 +1740,7 @@ async function startBrowser() {
     browserState.ws.onclose = () => {
       browserState.connected = false;
       browserState.ws = null;
+      state.autoBrowserStarted = false;
       containerDiv.style.display = 'none';
       statusDiv.style.display = 'block';
       statusDiv.innerHTML = '<p>浏览器已断开连接</p>';
@@ -1732,6 +1760,7 @@ async function startBrowser() {
     console.error('启动浏览器失败:', error);
     statusDiv.innerHTML = `<p>启动失败: ${error.message}</p>`;
     startBtn.disabled = false;
+    state.autoBrowserStarted = false;
   }
 }
 
@@ -1741,6 +1770,7 @@ function stopBrowser() {
     browserState.ws.close();
     browserState.ws = null;
   }
+  state.autoBrowserStarted = false;
 }
 
 function handleBrowserMessage(data) {

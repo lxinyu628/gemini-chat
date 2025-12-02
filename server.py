@@ -3,6 +3,7 @@ import json
 import os
 import time
 import uuid
+from urllib.parse import quote_plus
 from typing import Any, Dict, List, Optional, Union
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect, Header, Form
@@ -119,6 +120,24 @@ def _check_primary_worker() -> bool:
         # 任何异常都回退到允许运行（单 worker 模式或无法获取锁）
         logger.warning(f"检查主 worker 时出错，默认允许运行: {e}")
         return True
+
+
+def _build_account_chooser_url(config: dict) -> Optional[str]:
+    """构造 account-chooser URL，优先带上 group_id/csesidx，便于远程浏览器跳转到正确账号。"""
+    try:
+        group_id = config.get("group_id")
+        csesidx = config.get("csesidx")
+
+        base_continue = "https://business.gemini.google/home/"
+        if group_id:
+            base_continue = f"https://business.gemini.google/home/cid/{group_id}/"
+        if csesidx:
+            sep = "?" if "?" not in base_continue else "&"
+            base_continue = f"{base_continue}{sep}csesidx={csesidx}"
+
+        return f"https://auth.business.gemini.google/account-chooser?continueUrl={quote_plus(base_continue)}"
+    except Exception:
+        return None
 
 
 # 应用生命周期事件
@@ -342,6 +361,7 @@ async def get_status() -> dict:
     """获取登录状态（通过 list-sessions 检查真实的 session 状态）"""
     try:
         config = load_config()
+        account_chooser_url = _build_account_chooser_url(config)
 
         has_credentials = all([
             config.get("secure_c_ses"),
@@ -353,6 +373,7 @@ async def get_status() -> dict:
             return {
                 "logged_in": False,
                 "message": "未登录，请运行 python app.py login",
+                "account_chooser_url": account_chooser_url,
             }
 
         # 获取保活服务的状态（如果可用）
@@ -369,6 +390,7 @@ async def get_status() -> dict:
                     "logged_in": False,
                     "expired": True,
                     "message": "登录已过期，请重新运行 python app.py login",
+                    "account_chooser_url": account_chooser_url,
                 }
 
             return {
@@ -377,6 +399,7 @@ async def get_status() -> dict:
                 "username": session_username,
                 "last_check": keep_alive_status.get("last_check"),
                 "message": f"已登录: {session_username}" if session_username else "已登录",
+                "account_chooser_url": account_chooser_url,
             }
 
         # 如果保活服务还没有检查过，主动检查一次
@@ -391,6 +414,7 @@ async def get_status() -> dict:
                 "warning": True,
                 "expired": False,  # warning 状态不认为过期
                 "message": "登录异常，可能 Cookie 校验失败但可继续使用" if is_valid else session_status.get("error", "登录状态异常"),
+                "account_chooser_url": account_chooser_url,
                 "debug": {
                     "error": session_status.get("error"),
                     "raw_response": session_status.get("raw_response"),
@@ -403,6 +427,7 @@ async def get_status() -> dict:
                 "logged_in": False,
                 "expired": True,
                 "message": "登录已过期，请重新运行 python app.py login",
+                "account_chooser_url": account_chooser_url,
                 "debug": {
                     "error": session_status.get("error"),
                     "raw_response": session_status.get("raw_response"),
@@ -414,6 +439,7 @@ async def get_status() -> dict:
                 "logged_in": True,
                 "warning": True,
                 "message": f"检查状态失败: {session_status['error']}",
+                "account_chooser_url": account_chooser_url,
                 "debug": {
                     "error": session_status.get("error"),
                     "raw_response": session_status.get("raw_response"),
@@ -426,12 +452,14 @@ async def get_status() -> dict:
             "username": session_status.get("username"),
             "signout_url": session_status.get("signout_url"),
             "message": f"已登录: {session_status.get('username')}" if session_status.get("username") else "已登录",
+            "account_chooser_url": account_chooser_url,
         }
 
     except Exception as e:
         return {
             "logged_in": False,
             "error": str(e),
+            "account_chooser_url": None,
         }
 
 
@@ -1770,7 +1798,11 @@ async def browser_websocket(websocket: WebSocket) -> None:
     await websocket.accept()
 
     browser_service = get_browser_service()
-    session = await browser_service.create_session()
+    # 解析可选参数
+    start_url = websocket.query_params.get("start_url")
+    use_profile = websocket.query_params.get("use_profile", "0").lower() in ("1", "true", "yes", "on")
+
+    session = await browser_service.create_session(start_url=start_url, use_profile_dir=use_profile)
 
     # 消息发送回调
     async def send_message(message: dict) -> None:
@@ -1874,7 +1906,7 @@ async def browser_websocket(websocket: WebSocket) -> None:
 
 
 @app.post("/api/browser/start")
-async def start_browser() -> dict:
+async def start_browser(use_profile: bool = False, start_url: Optional[str] = None) -> dict:
     """启动远程浏览器（REST API 方式）"""
     browser_service = get_browser_service()
     session = await browser_service.get_active_session()
@@ -1887,7 +1919,7 @@ async def start_browser() -> dict:
             "message": "浏览器已在运行"
         }
 
-    session = await browser_service.create_session()
+    session = await browser_service.create_session(start_url=start_url, use_profile_dir=use_profile)
     return {
         "success": True,
         "session_id": session.session_id,
