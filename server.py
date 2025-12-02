@@ -3,6 +3,7 @@ import json
 import os
 import time
 import uuid
+from datetime import datetime
 from urllib.parse import quote_plus
 from typing import Any, Dict, List, Optional, Union
 
@@ -22,6 +23,8 @@ from biz_gemini.config import (
     load_config,
     reload_config,
     save_config,
+    mark_cookie_valid,
+    mark_cookie_expired,
 )
 from biz_gemini.openai_adapter import OpenAICompatClient
 from biz_gemini.anthropic_adapter import AnthropicCompatClient
@@ -380,30 +383,45 @@ async def get_status() -> dict:
         keep_alive = get_keep_alive_service()
         keep_alive_status = keep_alive.get_status()
 
-        # 如果保活服务已经检查过 session，使用缓存的结果
+        # 如果保活服务已经检查过 session，使用缓存的结果（超过 5 分钟或标记失效则重新检查）
         if keep_alive_status.get("last_check") and keep_alive_status.get("session_valid") is not None:
             session_valid = keep_alive_status["session_valid"]
             session_username = keep_alive_status.get("session_username")
+            last_check_ts = None
+            try:
+                last_check_ts = datetime.fromisoformat(keep_alive_status["last_check"])
+            except Exception:
+                pass
+            is_stale = False
+            if last_check_ts:
+                is_stale = (datetime.now() - last_check_ts).total_seconds() > 300
 
-            if not session_valid:
+            if session_valid and not is_stale:
                 return {
-                    "logged_in": False,
-                    "expired": True,
-                    "message": "登录已过期，请重新运行 python app.py login",
+                    "logged_in": True,
+                    "session_valid": True,
+                    "username": session_username,
+                    "last_check": keep_alive_status.get("last_check"),
+                    "message": f"已登录: {session_username}" if session_username else "已登录",
                     "account_chooser_url": account_chooser_url,
                 }
 
-            return {
-                "logged_in": True,
-                "session_valid": True,
-                "username": session_username,
-                "last_check": keep_alive_status.get("last_check"),
-                "message": f"已登录: {session_username}" if session_username else "已登录",
-                "account_chooser_url": account_chooser_url,
-            }
-
-        # 如果保活服务还没有检查过，主动检查一次
+        # 主动检查一次（缓存过期或标记失效）
         session_status = check_session_status(config)
+
+        # 同步更新保活服务缓存，减少短期重复误判
+        if session_status.get("valid", False):
+            try:
+                keep_alive._session_valid = True
+                keep_alive._session_username = session_status.get("username")
+                keep_alive._last_check = datetime.now()
+                keep_alive._last_error = None
+                keep_alive._cookie_expired = False
+            except Exception:
+                pass
+            mark_cookie_valid()
+        elif session_status.get("expired", False):
+            mark_cookie_expired("session check expired")
 
         # 处理 warning 状态（如 Cookies 无效/缺少 __Host-C_OSES，但 JWT 路径可用）
         if session_status.get("warning", False):
