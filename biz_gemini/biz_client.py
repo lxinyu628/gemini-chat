@@ -207,27 +207,35 @@ def build_headers(jwt: str) -> dict:
         "accept": "*/*",
         "accept-encoding": "gzip, deflate, br, zstd",
         "accept-language": "zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6",
+        "cache-control": "no-cache",
+        "pragma": "no-cache",
+        "dnt": "1",
         "authorization": f"Bearer {jwt}",
         "content-type": "application/json",
         "origin": "https://business.gemini.google",
         "priority": "u=1, i",
         "referer": "https://business.gemini.google/",
-        "sec-ch-ua": '"Chromium";v="140", "Not=A?Brand";v="24", "Microsoft Edge";v="140"',
+        "sec-ch-ua": '"Chromium";v="142", "Google Chrome";v="142", "Not_A Brand";v="99"',
         "sec-ch-ua-arch": '"x86"',
         "sec-ch-ua-bitness": '"64"',
         "sec-ch-ua-form-factors": '"Desktop"',
-        "sec-ch-ua-full-version": '"140.0.3485.54"',
-        "sec-ch-ua-full-version-list": '"Chromium";v="140.0.7339.81", "Not=A?Brand";v="24.0.0.0", "Microsoft Edge";v="140.0.3485.54"',
+        "sec-ch-ua-full-version": '"142.0.7444.176"',
+        "sec-ch-ua-full-version-list": '"Chromium";v="142.0.7444.176", "Google Chrome";v="142.0.7444.176", "Not_A Brand";v="99.0.0.0"',
         "sec-ch-ua-mobile": "?0",
         "sec-ch-ua-model": '""',
         "sec-ch-ua-platform": '"Windows"',
-        "sec-ch-ua-platform-version": '"19.0.0"',
+        "sec-ch-ua-platform-version": '"15.0.0"',
         "sec-ch-ua-wow64": "?0",
         "sec-fetch-dest": "empty",
         "sec-fetch-mode": "cors",
         "sec-fetch-site": "cross-site",
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36 Edg/140.0.0.0",
+        "(KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
+        "x-browser-channel": "stable",
+        "x-browser-copyright": "Copyright 2025 Google LLC. All Rights reserved.",
+        "x-browser-validation": "Aj9fzfu+SaGLBY9Oqr3S7RokOtM=",
+        "x-browser-year": "2025",
+        "x-client-data": "CIe2yQEIpLbJAQipncoBCPyMywEIkqHLAQiFoM0BCP6bzwEI9p3PAQ==",
         "x-server-timeout": "1800",
     }
 
@@ -334,7 +342,7 @@ class BizGeminiClient:
         page_size: int = 110,
         page_token: str = "",
         order_by: str = "update_time desc",
-        filter_str: str = 'display_name != "" AND (NOT labels:hidden-from-ui-history)',
+        filter_str: str = "",
     ) -> dict:
         """获取会话列表（对接 Google 官方接口）
 
@@ -354,9 +362,11 @@ class BizGeminiClient:
                 "pageSize": page_size,
                 "pageToken": page_token,
                 "orderBy": order_by,
-                "filter": filter_str,
             },
         }
+
+        if filter_str:
+            body["listSessionsRequest"]["filter"] = filter_str
 
         for attempt in range(2):
             jwt = self.jwt_manager.get_jwt()
@@ -378,7 +388,15 @@ class BizGeminiClient:
                     f"获取会话列表失败: {resp.status_code} {resp.text[:200]}"
                 )
 
-            return resp.json()
+            data = resp.json()
+            sessions = data.get("listSessionsResponse", {}).get("sessions", [])
+            logger.debug(
+                f"list_sessions response count={len(sessions)}, status={resp.status_code}, "
+                f"group_id={self.group_id}, filter={'<empty>' if not filter_str else filter_str}"
+            )
+            if not sessions:
+                logger.debug(f"list_sessions raw response: {json.dumps(data, ensure_ascii=False)[:500]}")
+            return data
 
         raise RuntimeError("多次尝试获取会话列表失败（可能是 cookie 失效，需要重新登录）。")
 
@@ -856,6 +874,9 @@ class BizGeminiClient:
                 self._parse_generated_image(gen_img, result, auto_save_images)
 
             answer = sar.get("answer") or {}
+            answer_state = answer.get("state") or sar.get("state")
+            skipped_reasons = answer.get("assistSkippedReasons") or sar.get("assistSkippedReasons") or []
+            policy_result = answer.get("customerPolicyEnforcementResult") or sar.get("customerPolicyEnforcementResult") or {}
 
             # 检查 answer 级别的 generatedImages
             answer_gen_images = answer.get("generatedImages") or []
@@ -863,6 +884,28 @@ class BizGeminiClient:
                 self._parse_generated_image(gen_img, result, auto_save_images)
 
             replies = answer.get("replies") or []
+
+            # 处理被策略阻断的情况：无回复但 state=SKIPPED
+            if (answer_state == "SKIPPED" or skipped_reasons) and not replies:
+                violation_detail = None
+                if "CUSTOMER_POLICY_VIOLATION" in skipped_reasons:
+                    for pr in policy_result.get("policyResults") or []:
+                        armor = pr.get("modelArmorEnforcementResult") or {}
+                        violation_detail = armor.get("modelArmorViolation")
+                        if violation_detail:
+                            break
+                if "CUSTOMER_POLICY_VIOLATION" in skipped_reasons:
+                    msg = "由于提示违反了您组织定义的安全政策，因此 Gemini Enterprise 无法回复。"
+                    if violation_detail:
+                        msg += f"（原因: {violation_detail}）"
+                elif skipped_reasons:
+                    msg = f"Gemini Enterprise 未能生成回复（原因: {', '.join(skipped_reasons)}）"
+                else:
+                    msg = f"Gemini Enterprise 未能生成回复（状态: {answer_state or '未知'}）"
+
+                texts.append(msg)
+                continue
+
             for reply in replies:
                 # 检查 reply 级别的 generatedImages
                 reply_gen_images = reply.get("generatedImages") or []

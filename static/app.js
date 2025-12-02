@@ -6,7 +6,10 @@ const state = {
   currentModel: 'business-gemini',
   uploadedFiles: [],
   theme: localStorage.getItem('theme') || 'light',
-  statusCheckInterval: null
+  statusCheckInterval: null,
+  signoutUrl: null,
+  accountChooserUrl: null,
+  autoBrowserStarted: false
 };
 
 // ==================== Lucide 图标自动渲染 ====================
@@ -432,6 +435,7 @@ const elements = {
   modelSelector: document.getElementById('modelSelector'),
   modelName: document.getElementById('modelName'),
   themeToggle: document.getElementById('themeToggle'),
+  sidebarBackdrop: document.getElementById('sidebarBackdrop'),
   statusIndicator: document.getElementById('statusIndicator'),
   expiredModal: document.getElementById('expiredModal')
 };
@@ -443,6 +447,7 @@ let modelsList = [];
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
   initEventListeners();
+  handleResponsiveSidebar();
   loadModels();
   loadConversations();
   checkStatus();
@@ -460,10 +465,26 @@ function toggleTheme() {
   document.documentElement.setAttribute('data-theme', state.theme);
 }
 
+function handleResponsiveSidebar() {
+  const isMobile = window.innerWidth <= 1024;
+  if (isMobile) {
+    document.body.classList.remove('sidebar-open');
+    elements.sidebar.classList.remove('hidden');
+  } else {
+    document.body.classList.remove('sidebar-open');
+    elements.sidebar.classList.remove('hidden');
+  }
+}
+
 // 事件监听
 function initEventListeners() {
   elements.themeToggle.addEventListener('click', toggleTheme);
   elements.sidebarToggle.addEventListener('click', toggleSidebar);
+  if (elements.sidebarBackdrop) {
+    elements.sidebarBackdrop.addEventListener('click', () => {
+      document.body.classList.remove('sidebar-open');
+    });
+  }
   elements.newChatBtn.addEventListener('click', createNewConversation);
   elements.sendBtn.addEventListener('click', sendMessage);
   elements.attachBtn.addEventListener('click', () => elements.fileInput.click());
@@ -474,6 +495,7 @@ function initEventListeners() {
     e.stopPropagation();
     toggleModelDropdown();
   });
+  window.addEventListener('resize', handleResponsiveSidebar);
 
   // 输入框自动调整高度
   const messageInput = elements.messageInput;
@@ -522,7 +544,18 @@ function initEventListeners() {
 }
 
 function toggleSidebar() {
-  elements.sidebar.classList.toggle('hidden');
+  const isMobile = window.innerWidth <= 1024;
+  if (isMobile) {
+    document.body.classList.toggle('sidebar-open');
+  } else {
+    elements.sidebar.classList.toggle('hidden');
+  }
+}
+
+function closeSidebarOnMobile() {
+  if (window.innerWidth <= 1024) {
+    document.body.classList.remove('sidebar-open');
+  }
 }
 
 function updateSendButton() {
@@ -544,6 +577,7 @@ async function checkStatus() {
     // 保存 signout_url 到全局状态
     state.signoutUrl = data.signout_url || null;
     state.currentUsername = data.username || null;
+    state.accountChooserUrl = data.account_chooser_url || state.accountChooserUrl;
 
     // 仅在 expired 或 logged_in=false 时弹过期模态框
     // warning=true 时只提示状态异常，不弹模态
@@ -585,6 +619,8 @@ function startStatusMonitoring() {
 
 function showExpiredModal() {
   elements.expiredModal.classList.add('show');
+   openLoginModal();
+   autoStartBrowserLogin();
 }
 
 // 模型加载
@@ -685,8 +721,12 @@ function openModelDropdown() {
 
   // 定位浮窗
   const rect = elements.modelSelector.getBoundingClientRect();
-  modelDropdown.style.left = rect.left + 'px';
-  modelDropdown.style.bottom = (window.innerHeight - rect.top + 8) + 'px';
+  const dropdownRect = modelDropdown.getBoundingClientRect();
+  const padding = 12;
+  const maxLeft = window.innerWidth - dropdownRect.width - padding;
+  const left = Math.max(padding, Math.min(rect.left, maxLeft));
+  modelDropdown.style.left = `${left}px`;
+  modelDropdown.style.bottom = `${window.innerHeight - rect.top + 8}px`;
 
   // 显示动画
   requestAnimationFrame(() => {
@@ -787,6 +827,7 @@ async function createNewConversation() {
 
     state.currentConversationId = data.session_id;
     state.currentSessionName = data.session_name || null;  // 保存完整 session name
+    closeSidebarOnMobile();
     elements.messagesContainer.innerHTML = '';
     elements.welcomeScreen.style.display = 'flex';
     elements.messageInput.value = '';
@@ -803,6 +844,7 @@ async function loadConversation(sessionId, sessionName = null) {
   try {
     state.currentConversationId = sessionId;
     state.currentSessionName = sessionName;  // 保存完整 session name
+    closeSidebarOnMobile();
 
     // 构建 URL，包含 session_name 参数（如果有）
     let url = `/api/sessions/${sessionId}/messages`;
@@ -828,7 +870,8 @@ async function loadConversation(sessionId, sessionName = null) {
         } else if (msg.thinking) {
           thinking = msg.thinking;
         }
-        appendMessage(msg.role, msg.content, msg.images, thinking);
+        // 传递 error_info 和 skipped 标志
+        appendMessage(msg.role, msg.content, msg.images, thinking, msg.error_info, msg.skipped, msg.attachments, msg.timestamp, msg.thinking_duration_ms);
       });
     } else {
       elements.welcomeScreen.style.display = 'flex';
@@ -916,6 +959,7 @@ function renderFilePreview() {
 async function sendMessage() {
   const message = elements.messageInput.value.trim();
   if (!message && state.uploadedFiles.length === 0) return;
+  const hadUploads = state.uploadedFiles.length > 0;
 
   // 确保有会话
   if (!state.currentConversationId) {
@@ -926,7 +970,7 @@ async function sendMessage() {
 
   // 如果有文件，先上传
   let uploadedFileNames = [];
-  let uploadResults = [];
+  const pendingAttachments = [];
   if (state.uploadedFiles.length > 0) {
     console.log('[DEBUG] 开始上传文件, session_id:', state.currentConversationId);
 
@@ -949,7 +993,13 @@ async function sendMessage() {
         if (uploadResp.ok) {
           const result = await uploadResp.json();
           uploadedFileNames.push(file.name);
-          uploadResults.push(result);
+          pendingAttachments.push({
+            file_id: result.file_id,
+            file_name: file.name,
+            mime_type: file.type || result.content_type,
+            size: file.size,
+            session_name: result.session_name || state.currentSessionName
+          });
           console.log('[DEBUG] 文件上传成功:', result);
         } else {
           const errorText = await uploadResp.text();
@@ -967,24 +1017,22 @@ async function sendMessage() {
     console.log('[DEBUG] 上传完成, 成功:', uploadedFileNames.length, '个文件');
   }
 
+  if (!message && hadUploads && pendingAttachments.length === 0) {
+    toast.error('文件上传失败，请重试');
+    return;
+  }
+
   // 构建消息内容
   let finalMessage = message;
   let displayMessage = message;
 
-  // 如果有上传的文件，在消息中添加提示
-  if (uploadedFileNames.length > 0) {
-    const fileList = uploadedFileNames.join(', ');
-    if (!message) {
-      finalMessage = `请分析上传的文件: ${fileList}`;
-      displayMessage = `[已上传文件: ${fileList}]\n请分析这些文件`;
-    } else {
-      // 在消息前添加文件信息
-      displayMessage = `[已上传文件: ${fileList}]\n${message}`;
-    }
+  // 如果有上传的文件，为模型添加文件提示，但不在 UI 中插入文件名
+  if (pendingAttachments.length > 0) {
+    finalMessage = message || '请结合我上传的文件进行分析。';
   }
 
   // 显示用户消息（包含文件信息）
-  appendMessage('user', displayMessage);
+  appendMessage('user', displayMessage || '', null, null, null, false, pendingAttachments, new Date().toISOString());
 
   // 清空输入
   elements.messageInput.value = '';
@@ -1004,81 +1052,99 @@ async function sendMessage() {
       body: JSON.stringify({
         model: state.currentModel,
         messages: [{ role: 'user', content: finalMessage }],
-        stream: false,
+        stream: true,
         session_id: state.currentConversationId,
         session_name: state.currentSessionName,
+        file_ids: pendingAttachments.map(f => f.file_id).filter(Boolean),
         include_image_data: true
       })
     });
 
+    if (!response.ok) {
+      removeTypingIndicator(loadingId);
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || error.message || '请求失败');
+    }
+
+    // 移除加载提示，准备渲染流式内容
     removeTypingIndicator(loadingId);
 
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.detail || '请求失败');
-    }
+    // 预创建助手消息占位
+    const assistantMsgDiv = appendMessage('assistant', '', null, null, null, false, null, new Date().toISOString());
+    const textEl = assistantMsgDiv.querySelector('.message-text');
 
-    const data = await response.json();
+    const decoder = new TextDecoder();
+    const reader = response.body.getReader();
+    let buffer = '';
+    let fullText = '';
+    let imagesData = null;
+    let done = false;
 
-    // 用响应中的 canonical session_id/session_name 更新 state（避免刷新后 ID 不匹配）
-    if (data.session_id && data.session_id !== state.currentConversationId) {
-      console.log('[DEBUG] 更新 session_id:', state.currentConversationId, '->', data.session_id);
-      state.currentConversationId = data.session_id;
-    }
-    if (data.session_name) {
-      state.currentSessionName = data.session_name;
-    }
+    const appendStreamChunk = (dataStr) => {
+      if (dataStr === '[DONE]') {
+        done = true;
+        return;
+      }
+      let payload = null;
+      try {
+        payload = JSON.parse(dataStr);
+      } catch (e) {
+        console.warn('流数据解析失败:', dataStr);
+        return;
+      }
 
-    const rawContent = data.choices[0].message.content;
+      if (payload.error) {
+        throw new Error(payload.error.message || '请求失败');
+      }
 
-    // 处理 content 可能是数组或字符串的情况
-    let textContent = '';
-    let inlineImages = [];
+      const delta = payload.choices?.[0]?.delta || {};
+      const deltaContent = delta.content || '';
 
-    if (Array.isArray(rawContent)) {
-      // content 是数组格式 [{type: "text", text: "..."}, {type: "image_url", image_url: {...}}]
-      rawContent.forEach(item => {
-        if (item.type === 'text' && item.text) {
-          textContent += item.text;
-        } else if (item.type === 'image_url' && item.image_url) {
-          inlineImages.push({
-            url: item.image_url.url
-          });
+      if (deltaContent) {
+        fullText += deltaContent;
+        if (textEl) {
+          textEl.textContent = fullText;
         }
-      });
-    } else {
-      // content 是字符串
-      textContent = rawContent;
+      }
+
+      if (payload.images) {
+        imagesData = payload.images;
+      }
+    };
+
+    while (true) {
+      const { value, done: streamDone } = await reader.read();
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !streamDone });
+
+      let idx;
+      while ((idx = buffer.indexOf('\n\n')) !== -1) {
+        const rawEvent = buffer.slice(0, idx).trim();
+        buffer = buffer.slice(idx + 2);
+        if (!rawEvent.startsWith('data:')) continue;
+        const dataStr = rawEvent.slice(5).trim();
+        if (!dataStr) continue;
+        appendStreamChunk(dataStr);
+      }
+
+      if (streamDone) break;
+      if (done) break;
     }
 
-    // 合并 inline images 和 response images
-    let allImages = [...inlineImages];
-    if (data.images && data.images.length > 0) {
-      data.images.forEach(img => {
-        // 处理 images 数组中的图片，优先使用 local_path 通过服务器代理访问
-        if (img.local_path) {
-          allImages.push({
-            url: `/api/images/${encodeURIComponent(img.file_name || img.file_id)}`
-          });
-        } else if (img.download_uri) {
-          allImages.push({ url: img.download_uri });
-        }
-      });
+    // 流结束后渲染最终 Markdown
+    if (textEl) {
+      textEl.innerHTML = renderMarkdown(fullText);
+      addCodeCopyButtons(textEl);
     }
 
-    // 获取思考链内容（如果有）
-    let thinkingContent = null;
-    const message = data.choices[0].message;
-    if (message.thoughts && Array.isArray(message.thoughts)) {
-      // thoughts 是数组，合并为字符串
-      thinkingContent = message.thoughts.join('\n');
-    } else if (message.thinking) {
-      thinkingContent = message.thinking;
-    } else if (data.thinking) {
-      thinkingContent = data.thinking;
+    if (imagesData && imagesData.length > 0) {
+      renderImagesForMessage(assistantMsgDiv, imagesData);
     }
 
-    appendMessage('assistant', textContent, allImages, thinkingContent);
+    ensureAssistantActions(assistantMsgDiv, fullText);
+
+    if (typeof lucide !== 'undefined') {
+      lucide.createIcons({ nodes: [assistantMsgDiv] });
+    }
 
     // 更新会话列表
     await loadConversations();
@@ -1089,21 +1155,24 @@ async function sendMessage() {
     if (error.message.includes('401') || error.message.includes('过期')) {
       showExpiredModal();
     } else {
-      appendMessage('assistant', `错误: ${error.message}`);
+      appendMessage('assistant', `错误: ${error.message}`, null, null, null, false, null, new Date().toISOString());
     }
   }
 }
 
 // 创建思考链显示块
-function createThinkingBlock(thinking, isActive = false) {
+function createThinkingBlock(thinking, isActive = false, thinkingDurationMs = null) {
   const block = document.createElement('div');
   block.className = 'thinking-block';
 
   const header = document.createElement('div');
   header.className = 'thinking-header';
+  const durationText = thinkingDurationMs != null
+    ? ` · 已思考${(Math.max(0, thinkingDurationMs) / 1000).toFixed(2)}s`
+    : '';
   header.innerHTML = `
     <i data-lucide="sparkles" class="thinking-icon${isActive ? ' spinning' : ''}"></i>
-    <span class="thinking-title${isActive ? ' thinking-active' : ''}">${isActive ? '正在思考...' : '显示思考过程'}</span>
+    <span class="thinking-title${isActive ? ' thinking-active' : ''}">${isActive ? '正在思考...' : '显示思考过程'}${durationText}</span>
     <i data-lucide="chevron-down" class="thinking-chevron"></i>
   `;
 
@@ -1129,15 +1198,31 @@ function createThinkingBlock(thinking, isActive = false) {
     block.classList.toggle('expanded');
     const titleSpan = header.querySelector('.thinking-title');
     if (!isActive && titleSpan) {
-      titleSpan.textContent = block.classList.contains('expanded') ? '隐藏思考过程' : '显示思考过程';
+      const base = block.classList.contains('expanded') ? '隐藏思考过程' : '显示思考过程';
+      titleSpan.textContent = `${base}${durationText}`;
     }
   });
 
   return block;
 }
 
+// 解析用户消息中的文件信息
+function parseUserMessageFileInfo(content) {
+  // 匹配格式: [已上传文件: xxx.png, yyy.pdf]\n消息内容
+  const fileInfoRegex = /^\[已上传文件: ([^\]]+)\]\n?/;
+  const match = content.match(fileInfoRegex);
+
+  if (match) {
+    const fileNames = match[1].split(', ').map(name => name.trim());
+    const textContent = content.slice(match[0].length);
+    return { fileNames, textContent };
+  }
+
+  return { fileNames: null, textContent: content };
+}
+
 // 消息显示
-function appendMessage(role, content, images = null, thinking = null) {
+function appendMessage(role, content, images = null, thinking = null, errorInfo = null, isSkipped = false, attachments = null, timestampIso = null, thinkingDurationMs = null) {
   const messageDiv = document.createElement('div');
   messageDiv.className = `message ${role}`;
 
@@ -1150,8 +1235,17 @@ function appendMessage(role, content, images = null, thinking = null) {
 
   // 如果有思考链，先显示思考链
   if (role === 'assistant' && thinking) {
-    const thinkingBlock = createThinkingBlock(thinking);
+    const thinkingBlock = createThinkingBlock(thinking, false, thinkingDurationMs);
     contentDiv.appendChild(thinkingBlock);
+  }
+
+  // 解析用户消息中的文件信息
+  let fileNames = null;
+  let textContent = content;
+  if (role === 'user' && content) {
+    const parsed = parseUserMessageFileInfo(content);
+    fileNames = parsed.fileNames;
+    textContent = parsed.textContent;
   }
 
   // 创建气泡容器
@@ -1160,18 +1254,179 @@ function appendMessage(role, content, images = null, thinking = null) {
 
   const textDiv = document.createElement('div');
   textDiv.className = 'message-text';
+  let hasTextContent = false;
 
+  // 如果是跳过的消息（错误/策略违规），显示特殊格式
+  if (role === 'assistant' && isSkipped && errorInfo) {
+    bubbleDiv.className = 'message-bubble error-bubble';
+
+    const errorContainer = document.createElement('div');
+    errorContainer.className = 'error-message-container';
+
+    // 第一行：图标 + 标题
+    const errorHeader = document.createElement('div');
+    errorHeader.className = 'error-message-header';
+    errorHeader.innerHTML = `
+      <i data-lucide="shield-alert" class="error-icon"></i>
+      <span class="error-title">${escapeHtml(errorInfo.title)}</span>
+    `;
+
+    errorContainer.appendChild(errorHeader);
+
+    // 第二行：详细原因（如果有）
+    if (errorInfo.detail) {
+      const errorDetail = document.createElement('div');
+      errorDetail.className = 'error-message-detail';
+      errorDetail.textContent = errorInfo.detail;
+      errorContainer.appendChild(errorDetail);
+    }
+
+    textDiv.appendChild(errorContainer);
+    hasTextContent = true;
+  }
   // 用户消息使用纯文本，AI 回复使用 Markdown 渲染
-  if (role === 'assistant' && content) {
+  else if (role === 'assistant' && content) {
     textDiv.innerHTML = renderMarkdown(content);
     // 为代码块添加复制按钮
     addCodeCopyButtons(textDiv);
-  } else {
+    hasTextContent = true;
+  } else if (content) {
     textDiv.textContent = content;
+    hasTextContent = true;
   }
 
-  bubbleDiv.appendChild(textDiv);
+  // 如果有附件但没有正文，给一个轻量提示文案
+  if (!hasTextContent && attachments && attachments.length > 0) {
+    textDiv.textContent = '已上传的文件';
+    textDiv.classList.add('message-hint');
+    hasTextContent = true;
+  }
+
+  if (hasTextContent) {
+    bubbleDiv.appendChild(textDiv);
+  }
+
+  // 当没有正文也没有附件时，保持原有结构
+  if (!hasTextContent && (!attachments || attachments.length === 0)) {
+    bubbleDiv.appendChild(textDiv);
+  }
+
   contentDiv.appendChild(bubbleDiv);
+
+  // 附件预览区域 - 作为独立气泡显示在消息下方
+  if (attachments && attachments.length > 0) {
+    const fileBubbleDiv = document.createElement('div');
+    fileBubbleDiv.className = 'message-bubble file-info-bubble';
+
+    const attachmentsDiv = document.createElement('div');
+    attachmentsDiv.className = 'message-attachments';
+
+    attachments.forEach(att => {
+      const item = document.createElement('div');
+      item.className = 'attachment-item';
+
+      // 根据文件名或 MIME 类型选择图标
+      const fileName = att.file_name || att.name || att.file_id || '未命名文件';
+      const mime = att.mime_type || att.mimeType || '';
+      const ext = fileName.split('.').pop().toLowerCase();
+      let iconName = 'file';
+      if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(ext) || mime.startsWith('image/')) {
+        iconName = 'image';
+      } else if (['pdf'].includes(ext) || mime === 'application/pdf') {
+        iconName = 'file-text';
+      } else if (['doc', 'docx'].includes(ext) || mime.includes('word')) {
+        iconName = 'file-type';
+      } else if (['xls', 'xlsx'].includes(ext) || mime.includes('spreadsheet') || mime.includes('excel')) {
+        iconName = 'file-spreadsheet';
+      } else if (['ppt', 'pptx'].includes(ext) || mime.includes('presentation') || mime.includes('powerpoint')) {
+        iconName = 'presentation';
+      } else if (['mp4', 'avi', 'mov', 'webm', 'mkv'].includes(ext) || mime.startsWith('video/')) {
+        iconName = 'file-video';
+      } else if (['mp3', 'wav', 'ogg', 'flac', 'aac'].includes(ext) || mime.startsWith('audio/')) {
+        iconName = 'file-audio';
+      } else if (['zip', 'rar', '7z', 'tar', 'gz'].includes(ext) || mime.includes('zip') || mime.includes('compressed')) {
+        iconName = 'file-archive';
+      } else if (['txt', 'md', 'json', 'xml', 'csv'].includes(ext) || mime.startsWith('text/')) {
+        iconName = 'file-text';
+      } else if (['js', 'ts', 'py', 'java', 'c', 'cpp', 'h', 'css', 'html', 'jsx', 'tsx'].includes(ext)) {
+        iconName = 'file-code';
+      }
+
+      // 创建图标元素
+      const iconEl = document.createElement('i');
+      iconEl.setAttribute('data-lucide', iconName);
+      iconEl.className = 'attachment-icon';
+
+      // 创建信息容器
+      const infoEl = document.createElement('div');
+      infoEl.className = 'attachment-info';
+
+      const nameEl = document.createElement('div');
+      nameEl.className = 'attachment-name';
+      nameEl.textContent = fileName;
+
+      const metaEl = document.createElement('div');
+      metaEl.className = 'attachment-meta';
+      const mimeDisplay = mime || '未知类型';
+      const sizeVal = att.byte_size ?? att.size;
+      const metaParts = [mimeDisplay];
+      if (sizeVal) {
+        metaParts.push(formatFileSize(sizeVal));
+      }
+      metaEl.textContent = metaParts.join(' · ');
+
+      infoEl.appendChild(nameEl);
+      infoEl.appendChild(metaEl);
+      item.appendChild(iconEl);
+      item.appendChild(infoEl);
+      attachmentsDiv.appendChild(item);
+    });
+
+    fileBubbleDiv.appendChild(attachmentsDiv);
+    contentDiv.appendChild(fileBubbleDiv);
+  }
+
+  // 兼容旧格式：如果是用户消息且有文件信息（从文本解析），创建独立的文件信息气泡
+  if (role === 'user' && fileNames && fileNames.length > 0 && (!attachments || attachments.length === 0)) {
+    const fileBubbleDiv = document.createElement('div');
+    fileBubbleDiv.className = 'message-bubble file-info-bubble';
+
+    const fileInfoDiv = document.createElement('div');
+    fileInfoDiv.className = 'file-info-content';
+
+    fileNames.forEach(fileName => {
+      const fileItem = document.createElement('div');
+      fileItem.className = 'file-info-item';
+
+      // 根据文件扩展名选择图标
+      const ext = fileName.split('.').pop().toLowerCase();
+      let iconName = 'file';
+      if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp'].includes(ext)) {
+        iconName = 'image';
+      } else if (['pdf'].includes(ext)) {
+        iconName = 'file-text';
+      } else if (['doc', 'docx'].includes(ext)) {
+        iconName = 'file-text';
+      } else if (['xls', 'xlsx'].includes(ext)) {
+        iconName = 'file-spreadsheet';
+      } else if (['mp4', 'avi', 'mov', 'webm'].includes(ext)) {
+        iconName = 'file-video';
+      } else if (['mp3', 'wav', 'ogg'].includes(ext)) {
+        iconName = 'file-audio';
+      } else if (['zip', 'rar', '7z', 'tar', 'gz'].includes(ext)) {
+        iconName = 'file-archive';
+      }
+
+      fileItem.innerHTML = `
+        <i data-lucide="${iconName}" class="file-info-icon"></i>
+        <span class="file-info-name">${escapeHtml(fileName)}</span>
+      `;
+      fileInfoDiv.appendChild(fileItem);
+    });
+
+    fileBubbleDiv.appendChild(fileInfoDiv);
+    contentDiv.appendChild(fileBubbleDiv);
+  }
 
   // 添加图片
   if (images && images.length > 0) {
@@ -1245,19 +1500,119 @@ function appendMessage(role, content, images = null, thinking = null) {
     contentDiv.appendChild(actionsDiv);
   }
 
-  const timestamp = document.createElement('div');
-  timestamp.className = 'message-timestamp';
-  timestamp.textContent = new Date().toLocaleTimeString('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit'
-  });
-  contentDiv.appendChild(timestamp);
+  const tsDiv = document.createElement('div');
+  tsDiv.className = 'message-timestamp';
+  tsDiv.textContent = formatTimestamp(timestampIso);
+  contentDiv.appendChild(tsDiv);
 
   messageDiv.appendChild(avatar);
   messageDiv.appendChild(contentDiv);
 
   elements.messagesContainer.appendChild(messageDiv);
   scrollToBottom();
+
+  if (typeof lucide !== 'undefined') {
+    lucide.createIcons({ nodes: [messageDiv] });
+  }
+
+  return messageDiv;
+}
+
+function renderImagesForMessage(messageDiv, images = []) {
+  if (!messageDiv || !images || images.length === 0) return;
+
+  const contentDiv = messageDiv.querySelector('.message-content');
+  if (!contentDiv) return;
+
+  let imagesDiv = messageDiv.querySelector('.message-images');
+  if (!imagesDiv) {
+    imagesDiv = document.createElement('div');
+    imagesDiv.className = 'message-images';
+    contentDiv.appendChild(imagesDiv);
+  } else {
+    imagesDiv.innerHTML = '';
+  }
+
+  images.forEach(img => {
+    const imgWrapper = document.createElement('div');
+    imgWrapper.className = 'message-image';
+
+    const imgElement = document.createElement('img');
+    if (img.local_path || img.file_name || img.file_id) {
+      // 优先通过后端代理访问本地缓存
+      const fileName = encodeURIComponent(img.file_name || img.file_id);
+      imgElement.src = `/api/images/${fileName}`;
+    } else if (img.download_uri) {
+      imgElement.src = img.download_uri;
+    } else if (img.url) {
+      imgElement.src = img.url;
+    } else if (img.data) {
+      imgElement.src = `data:image/png;base64,${img.data}`;
+    } else {
+      return;
+    }
+
+    imgElement.alt = 'Generated image';
+    imgWrapper.appendChild(imgElement);
+    imagesDiv.appendChild(imgWrapper);
+  });
+}
+
+function ensureAssistantActions(messageDiv, content) {
+  if (!messageDiv || !content) return;
+  if (messageDiv.querySelector('.message-actions')) return;
+
+  const contentDiv = messageDiv.querySelector('.message-content');
+  if (!contentDiv) return;
+
+  const actionsDiv = document.createElement('div');
+  actionsDiv.className = 'message-actions';
+
+  // 复制按钮
+  const copyBtn = document.createElement('button');
+  copyBtn.className = 'message-action-btn';
+  copyBtn.title = '复制';
+  copyBtn.innerHTML = `<i data-lucide="copy"></i>`;
+  copyBtn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(content);
+      copyBtn.innerHTML = `<i data-lucide="check"></i>`;
+      copyBtn.classList.add('copied');
+      setTimeout(() => {
+        copyBtn.innerHTML = `<i data-lucide="copy"></i>`;
+        copyBtn.classList.remove('copied');
+        if (typeof lucide !== 'undefined') {
+          lucide.createIcons({ nodes: [copyBtn] });
+        }
+      }, 2000);
+      if (typeof lucide !== 'undefined') {
+        lucide.createIcons({ nodes: [copyBtn] });
+      }
+    } catch (e) {
+      console.error('复制失败:', e);
+    }
+  });
+
+  // 下载按钮
+  const downloadBtn = document.createElement('button');
+  downloadBtn.className = 'message-action-btn';
+  downloadBtn.title = '下载';
+  downloadBtn.innerHTML = `<i data-lucide="download"></i>`;
+  downloadBtn.addEventListener('click', () => {
+    const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `gemini-response-${Date.now()}.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  });
+
+  actionsDiv.appendChild(copyBtn);
+  actionsDiv.appendChild(downloadBtn);
+  contentDiv.appendChild(actionsDiv);
 }
 
 function showTypingIndicator() {
@@ -1273,6 +1628,10 @@ function showTypingIndicator() {
   const contentDiv = document.createElement('div');
   contentDiv.className = 'message-content';
 
+  const tsDiv = document.createElement('div');
+  tsDiv.className = 'message-timestamp';
+  tsDiv.textContent = formatTimestamp();
+
   // 显示"正在思考"的动画效果
   const thinkingIndicator = document.createElement('div');
   thinkingIndicator.className = 'thinking-indicator';
@@ -1282,6 +1641,7 @@ function showTypingIndicator() {
   `;
 
   contentDiv.appendChild(thinkingIndicator);
+  contentDiv.appendChild(tsDiv);
   messageDiv.appendChild(avatar);
   messageDiv.appendChild(contentDiv);
 
@@ -1303,6 +1663,33 @@ function scrollToBottom() {
 }
 
 // 工具函数
+function formatTimestamp(ts) {
+  const d = ts ? new Date(ts) : new Date();
+  if (Number.isNaN(d.getTime())) return '';
+
+  const pad = (n) => String(n).padStart(2, '0');
+  const yyyy = d.getFullYear();
+  const mm = pad(d.getMonth() + 1);
+  const dd = pad(d.getDate());
+  const hh = pad(d.getHours());
+  const min = pad(d.getMinutes());
+  const ss = pad(d.getSeconds());
+  return `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
+}
+
+function formatFileSize(bytes) {
+  if (!bytes || isNaN(bytes)) return '';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let size = bytes;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex++;
+  }
+  const displaySize = size % 1 === 0 ? size : size.toFixed(1);
+  return `${displaySize} ${units[unitIndex]}`;
+}
+
 function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
@@ -1310,7 +1697,7 @@ function escapeHtml(text) {
 }
 
 function showError(message) {
-  appendMessage('assistant', `错误: ${message}`);
+  appendMessage('assistant', `错误: ${message}`, null, null, null, false, null, new Date().toISOString());
 }
 
 // ==================== 远程浏览器登录 ====================
@@ -1321,6 +1708,19 @@ const browserState = {
   connected: false,
   status: 'idle'
 };
+
+function autoStartBrowserLogin() {
+  if (state.autoBrowserStarted || browserState.connected) return;
+  state.autoBrowserStarted = true;
+
+  const continueTarget = state.accountChooserUrl
+    ? null
+    : 'https://business.gemini.google/home/';
+  const fallbackUrl = `https://auth.business.gemini.google/account-chooser?continueUrl=${encodeURIComponent(continueTarget || 'https://business.gemini.google/')}`;
+  const startUrl = state.accountChooserUrl || fallbackUrl;
+
+  startBrowser({ useProfile: true, startUrl, auto: true });
+}
 
 // 打开登录模态框
 function openLoginModal() {
@@ -1352,26 +1752,34 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 });
 
 // 启动远程浏览器
-document.getElementById('startBrowserBtn').addEventListener('click', startBrowser);
+document.getElementById('startBrowserBtn').addEventListener('click', () => startBrowser());
 document.getElementById('stopBrowserBtn').addEventListener('click', stopBrowser);
 
 // 手动保存配置
 document.getElementById('saveManualBtn').addEventListener('click', saveManualConfig);
 
-async function startBrowser() {
+async function startBrowser(options = {}) {
+  const { useProfile = false, startUrl = null, auto = false } = options || {};
+
+  if (browserState.connected) return;
+
   const statusDiv = document.getElementById('browserStatus');
   const containerDiv = document.getElementById('browserContainer');
   const startBtn = document.getElementById('startBrowserBtn');
   const stopBtn = document.getElementById('stopBrowserBtn');
   const inputBox = document.getElementById('browserInput');
 
-  statusDiv.innerHTML = '<p>正在连接...</p>';
+  statusDiv.innerHTML = auto ? '<p>检测到过期，正在自动启动远程浏览器...</p>' : '<p>正在连接...</p>';
   startBtn.disabled = true;
 
   try {
     // 获取 WebSocket URL
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws/browser`;
+    const params = new URLSearchParams();
+    if (useProfile) params.set('use_profile', '1');
+    if (startUrl) params.set('start_url', startUrl);
+    const qs = params.toString();
+    const wsUrl = `${protocol}//${window.location.host}/ws/browser${qs ? `?${qs}` : ''}`;
 
     browserState.ws = new WebSocket(wsUrl);
 
@@ -1388,6 +1796,7 @@ async function startBrowser() {
     browserState.ws.onclose = () => {
       browserState.connected = false;
       browserState.ws = null;
+      state.autoBrowserStarted = false;
       containerDiv.style.display = 'none';
       statusDiv.style.display = 'block';
       statusDiv.innerHTML = '<p>浏览器已断开连接</p>';
@@ -1407,6 +1816,7 @@ async function startBrowser() {
     console.error('启动浏览器失败:', error);
     statusDiv.innerHTML = `<p>启动失败: ${error.message}</p>`;
     startBtn.disabled = false;
+    state.autoBrowserStarted = false;
   }
 }
 
@@ -1416,6 +1826,7 @@ function stopBrowser() {
     browserState.ws.close();
     browserState.ws = null;
   }
+  state.autoBrowserStarted = false;
 }
 
 function handleBrowserMessage(data) {

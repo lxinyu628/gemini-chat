@@ -34,12 +34,13 @@ class BrowserSessionStatus(str, Enum):
 class RemoteBrowserSession:
     """远程浏览器会话"""
 
-    def __init__(self, session_id: str, profile_dir: Optional[str] = None):
+    def __init__(self, session_id: str, profile_dir: Optional[str] = None, start_url: str = "https://business.gemini.google/"):
         """初始化浏览器会话
 
         Args:
             session_id: 会话 ID
             profile_dir: 用户数据目录路径。如果为 None，使用临时目录（每次清空）
+            start_url: 启动后首先访问的地址
         """
         self.session_id = session_id
         self.status = BrowserSessionStatus.IDLE
@@ -61,6 +62,7 @@ class RemoteBrowserSession:
         # 用户数据目录策略
         self._custom_profile_dir = profile_dir  # 显式指定的目录
         self._temp_profile_dir: Optional[str] = None  # 实际使用的临时目录路径
+        self._start_url = start_url or "https://business.gemini.google/"
 
     def _prepare_profile_dir(self) -> Optional[str]:
         """准备用户数据目录
@@ -163,7 +165,7 @@ class RemoteBrowserSession:
             await self._notify_status()
 
             try:
-                await self._page.goto("https://business.gemini.google/", timeout=60000)
+                await self._page.goto(self._start_url, timeout=60000)
             except Exception as nav_error:
                 error_msg = str(nav_error)
                 if "net::ERR_" in error_msg or "Timeout" in error_msg:
@@ -432,7 +434,7 @@ class RemoteBrowserService:
         self._sessions: Dict[str, RemoteBrowserSession] = {}
         self._lock = asyncio.Lock()
 
-    async def create_session(self) -> RemoteBrowserSession:
+    async def create_session(self, start_url: Optional[str] = None, use_profile_dir: bool = False) -> RemoteBrowserSession:
         """创建新的浏览器会话"""
         async with self._lock:
             # 清理旧会话
@@ -443,10 +445,23 @@ class RemoteBrowserService:
                 if session.status in (BrowserSessionStatus.STARTING, BrowserSessionStatus.RUNNING):
                     return session
 
+            profile_dir = None
+            if use_profile_dir:
+                try:
+                    config = load_config()
+                    profile_candidate = config.get("cookie_profile_dir")
+                    if profile_candidate and os.path.exists(profile_candidate):
+                        profile_dir = profile_candidate
+                        logger.info(f"使用 cookie_profile_dir 作为用户数据目录: {profile_dir}")
+                    elif profile_candidate:
+                        logger.warning(f"cookie_profile_dir 不存在: {profile_candidate}")
+                except Exception as e:
+                    logger.warning(f"读取 cookie_profile_dir 失败: {e}")
+
             # 创建新会话
             import uuid
             session_id = str(uuid.uuid4())
-            session = RemoteBrowserSession(session_id)
+            session = RemoteBrowserSession(session_id, profile_dir=profile_dir, start_url=start_url or "https://business.gemini.google/")
             self._sessions[session_id] = session
 
             return session

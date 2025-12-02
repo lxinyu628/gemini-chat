@@ -3,6 +3,8 @@ import json
 import os
 import time
 import uuid
+from datetime import datetime, timezone
+from urllib.parse import quote_plus
 from typing import Any, Dict, List, Optional, Union
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect, Header, Form
@@ -11,14 +13,28 @@ from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from biz_gemini.auth import JWTManager, check_session_status
+from biz_gemini.auth import JWTManager, check_session_status, ensure_jwt_valid, request_getoxsrf, GETOXSRF_URL
 from biz_gemini.biz_client import BizGeminiClient
-from biz_gemini.config import cookies_age_seconds, cookies_expired, load_config, reload_config, save_config, get_proxy
+from biz_gemini.config import (
+    cookies_age_seconds,
+    cookies_expired,
+    get_proxy,
+    is_cookie_expired,
+    load_config,
+    reload_config,
+    save_config,
+    mark_cookie_valid,
+    mark_cookie_expired,
+)
 from biz_gemini.openai_adapter import OpenAICompatClient
 from biz_gemini.anthropic_adapter import AnthropicCompatClient
 from biz_gemini.web_login import get_login_service
 from biz_gemini.remote_browser import get_browser_service, BrowserSessionStatus
-from biz_gemini.keep_alive import get_keep_alive_service
+from biz_gemini.keep_alive import get_keep_alive_service, notify_auth_error
+from biz_gemini.browser_keep_alive import (
+    get_browser_keep_alive_service,
+    try_refresh_cookie_via_browser,
+)
 from biz_gemini.logger import get_logger
 from config_watcher import start_config_watcher, stop_config_watcher
 from version import VERSION, get_version_info, GITHUB_REPO
@@ -55,27 +71,143 @@ def on_config_changed(new_config: dict) -> None:
     # 可以在这里添加其他配置变更处理逻辑
     # 例如：更新代理配置、刷新客户端等
 
+# 用于标记是否是第一个 worker（避免多 worker 重复启动浏览器）
+_is_primary_worker = False
+
+
+def _check_primary_worker() -> bool:
+    """检查是否应该作为主 worker 运行后台服务
+
+    在多 worker 模式下，只有一个 worker 应该运行浏览器保活等后台服务。
+    使用文件锁来协调（跨平台兼容）。
+    """
+    import os
+    import tempfile
+
+    # 检查是否在 Gunicorn 多 worker 模式下
+    # Gunicorn 会设置 SERVER_SOFTWARE 环境变量
+    server_software = os.environ.get("SERVER_SOFTWARE", "")
+    if "gunicorn" not in server_software.lower():
+        # 非 Gunicorn 模式（如直接 uvicorn），总是主 worker
+        return True
+
+    # 使用跨平台的文件锁机制
+    lock_file = os.path.join(tempfile.gettempdir(), "gemini_chat_browser_keep_alive.lock")
+
+    try:
+        # Windows 使用 msvcrt，Unix 使用 fcntl
+        if os.name == "nt":
+            # Windows
+            import msvcrt
+            lock_fd = open(lock_file, "w")
+            try:
+                msvcrt.locking(lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
+                globals()["_lock_fd"] = lock_fd
+                return True
+            except (IOError, OSError):
+                lock_fd.close()
+                return False
+        else:
+            # Unix/Linux/Mac
+            import fcntl
+            lock_fd = open(lock_file, "w")
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                globals()["_lock_fd"] = lock_fd
+                return True
+            except (IOError, OSError, BlockingIOError):
+                lock_fd.close()
+                return False
+
+    except Exception as e:
+        # 任何异常都回退到允许运行（单 worker 模式或无法获取锁）
+        logger.warning(f"检查主 worker 时出错，默认允许运行: {e}")
+        return True
+
+
+def _build_account_chooser_url(config: dict) -> Optional[str]:
+    """构造 account-chooser URL，优先带上 group_id/csesidx，便于远程浏览器跳转到正确账号。"""
+    try:
+        group_id = config.get("group_id")
+        csesidx = config.get("csesidx")
+
+        base_continue = "https://business.gemini.google/home/"
+        if group_id:
+            base_continue = f"https://business.gemini.google/home/cid/{group_id}/"
+        if csesidx:
+            sep = "?" if "?" not in base_continue else "&"
+            base_continue = f"{base_continue}{sep}csesidx={csesidx}"
+
+        return f"https://auth.business.gemini.google/account-chooser?continueUrl={quote_plus(base_continue)}"
+    except Exception:
+        return None
+
+
 # 应用生命周期事件
 @app.on_event("startup")
 async def startup_event() -> None:
     """应用启动时执行"""
+    global _is_primary_worker
+
     logger.info("启动配置文件监控...")
     start_config_watcher(callback=on_config_changed)
     logger.info("配置监控已启动")
 
-    # 启动 Session 保活服务
-    logger.info("启动 Session 保活服务...")
-    keep_alive = get_keep_alive_service(interval_minutes=10)
-    await keep_alive.start()
-    logger.info("Session 保活服务已启动（每 10 分钟检查一次）")
+    # 加载配置
+    config = load_config()
+    browser_keep_alive_config = config.get("browser_keep_alive", {})
+
+    # 检查是否是主 worker
+    _is_primary_worker = _check_primary_worker()
+
+    if _is_primary_worker:
+        # 启动 Session 保活服务（只在主 worker 中运行）
+        logger.info("启动 Session 保活服务...")
+        auto_browser_refresh = browser_keep_alive_config.get("enabled", False)
+        keep_alive = get_keep_alive_service(
+            interval_minutes=10,
+            auto_browser_refresh=auto_browser_refresh,
+        )
+        await keep_alive.start()
+        logger.info(f"Session 保活服务已启动（每 10 分钟检查一次，自动浏览器刷新: {auto_browser_refresh}）")
+
+        # 启动浏览器保活服务（如果启用，只在主 worker 中运行）
+        if browser_keep_alive_config.get("enabled", False):
+            logger.info("启动浏览器保活服务...")
+            browser_keep_alive = get_browser_keep_alive_service(
+                interval_minutes=browser_keep_alive_config.get("interval_minutes", 60),
+                headless=browser_keep_alive_config.get("headless", True),
+            )
+            await browser_keep_alive.start()
+            logger.info(f"浏览器保活服务已启动（每 {browser_keep_alive_config.get('interval_minutes', 60)} 分钟刷新一次）")
+    else:
+        logger.info("非主 worker，跳过后台服务启动")
 
 @app.on_event("shutdown")
 async def shutdown_event() -> None:
     """应用关闭时执行"""
-    logger.info("停止 Session 保活服务...")
-    keep_alive = get_keep_alive_service()
-    await keep_alive.stop()
-    logger.info("Session 保活服务已停止")
+    global _is_primary_worker
+
+    if _is_primary_worker:
+        logger.info("停止 Session 保活服务...")
+        keep_alive = get_keep_alive_service()
+        await keep_alive.stop()
+        logger.info("Session 保活服务已停止")
+
+        # 停止浏览器保活服务
+        config = load_config()
+        if config.get("browser_keep_alive", {}).get("enabled", False):
+            logger.info("停止浏览器保活服务...")
+            browser_keep_alive = get_browser_keep_alive_service()
+            await browser_keep_alive.stop()
+            logger.info("浏览器保活服务已停止")
+
+        # 释放文件锁
+        if "_lock_fd" in globals():
+            try:
+                globals()["_lock_fd"].close()
+            except Exception:
+                pass
 
     logger.info("停止配置文件监控...")
     stop_config_watcher()
@@ -93,6 +225,7 @@ class ChatRequest(BaseModel):
     stream: bool = False
     session_id: Optional[str] = None
     session_name: Optional[str] = None
+    file_ids: Optional[List[str]] = None
     include_image_data: bool = True
     include_thoughts: bool = False  # 是否返回思考链
     embed_images_in_content: bool = True  # 是否将图片内嵌到 content（OpenAI 兼容模式）
@@ -231,6 +364,7 @@ async def get_status() -> dict:
     """获取登录状态（通过 list-sessions 检查真实的 session 状态）"""
     try:
         config = load_config()
+        account_chooser_url = _build_account_chooser_url(config)
 
         has_credentials = all([
             config.get("secure_c_ses"),
@@ -242,34 +376,52 @@ async def get_status() -> dict:
             return {
                 "logged_in": False,
                 "message": "未登录，请运行 python app.py login",
+                "account_chooser_url": account_chooser_url,
             }
 
         # 获取保活服务的状态（如果可用）
         keep_alive = get_keep_alive_service()
         keep_alive_status = keep_alive.get_status()
 
-        # 如果保活服务已经检查过 session，使用缓存的结果
+        # 如果保活服务已经检查过 session，使用缓存的结果（超过 5 分钟或标记失效则重新检查）
         if keep_alive_status.get("last_check") and keep_alive_status.get("session_valid") is not None:
             session_valid = keep_alive_status["session_valid"]
             session_username = keep_alive_status.get("session_username")
+            last_check_ts = None
+            try:
+                last_check_ts = datetime.fromisoformat(keep_alive_status["last_check"])
+            except Exception:
+                pass
+            is_stale = False
+            if last_check_ts:
+                is_stale = (datetime.now() - last_check_ts).total_seconds() > 300
 
-            if not session_valid:
+            if session_valid and not is_stale:
                 return {
-                    "logged_in": False,
-                    "expired": True,
-                    "message": "登录已过期，请重新运行 python app.py login",
+                    "logged_in": True,
+                    "session_valid": True,
+                    "username": session_username,
+                    "last_check": keep_alive_status.get("last_check"),
+                    "message": f"已登录: {session_username}" if session_username else "已登录",
+                    "account_chooser_url": account_chooser_url,
                 }
 
-            return {
-                "logged_in": True,
-                "session_valid": True,
-                "username": session_username,
-                "last_check": keep_alive_status.get("last_check"),
-                "message": f"已登录: {session_username}" if session_username else "已登录",
-            }
-
-        # 如果保活服务还没有检查过，主动检查一次
+        # 主动检查一次（缓存过期或标记失效）
         session_status = check_session_status(config)
+
+        # 同步更新保活服务缓存，减少短期重复误判
+        if session_status.get("valid", False):
+            try:
+                keep_alive._session_valid = True
+                keep_alive._session_username = session_status.get("username")
+                keep_alive._last_check = datetime.now()
+                keep_alive._last_error = None
+                keep_alive._cookie_expired = False
+            except Exception:
+                pass
+            mark_cookie_valid()
+        elif session_status.get("expired", False):
+            mark_cookie_expired("session check expired")
 
         # 处理 warning 状态（如 Cookies 无效/缺少 __Host-C_OSES，但 JWT 路径可用）
         if session_status.get("warning", False):
@@ -280,6 +432,7 @@ async def get_status() -> dict:
                 "warning": True,
                 "expired": False,  # warning 状态不认为过期
                 "message": "登录异常，可能 Cookie 校验失败但可继续使用" if is_valid else session_status.get("error", "登录状态异常"),
+                "account_chooser_url": account_chooser_url,
                 "debug": {
                     "error": session_status.get("error"),
                     "raw_response": session_status.get("raw_response"),
@@ -292,6 +445,7 @@ async def get_status() -> dict:
                 "logged_in": False,
                 "expired": True,
                 "message": "登录已过期，请重新运行 python app.py login",
+                "account_chooser_url": account_chooser_url,
                 "debug": {
                     "error": session_status.get("error"),
                     "raw_response": session_status.get("raw_response"),
@@ -303,6 +457,7 @@ async def get_status() -> dict:
                 "logged_in": True,
                 "warning": True,
                 "message": f"检查状态失败: {session_status['error']}",
+                "account_chooser_url": account_chooser_url,
                 "debug": {
                     "error": session_status.get("error"),
                     "raw_response": session_status.get("raw_response"),
@@ -315,12 +470,14 @@ async def get_status() -> dict:
             "username": session_status.get("username"),
             "signout_url": session_status.get("signout_url"),
             "message": f"已登录: {session_status.get('username')}" if session_status.get("username") else "已登录",
+            "account_chooser_url": account_chooser_url,
         }
 
     except Exception as e:
         return {
             "logged_in": False,
             "error": str(e),
+            "account_chooser_url": None,
         }
 
 
@@ -773,6 +930,20 @@ async def delete_session(session_id: str) -> dict:
 @app.get("/api/sessions/{session_id}/messages")
 async def get_session_messages(session_id: str, session_name: Optional[str] = None) -> dict:
     """获取会话消息历史 - 优先本地存储，其次调用 Google API"""
+    def _parse_dt(ts: Optional[str]) -> Optional[datetime]:
+        if not ts:
+            return None
+        try:
+            # 兼容末尾 Z
+            return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    def _to_iso_z(dt_obj: Optional[datetime]) -> str:
+        if not dt_obj:
+            return ""
+        return dt_obj.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
     # 1. 优先从本地存储获取
     if session_id in sessions:
         local_messages = sessions[session_id].get("messages", [])
@@ -805,30 +976,122 @@ async def get_session_messages(session_id: str, session_name: Optional[str] = No
         # 获取完整的 session name（用于构造图片下载 URL）
         full_session_name = session_data.get("name", "")
 
+        def build_skipped_message(detailed_answer: dict) -> Optional[dict]:
+            """构造跳过回复时的提示信息（返回结构化数据）"""
+            state = detailed_answer.get("state")
+            reasons = detailed_answer.get("assistSkippedReasons") or []
+            if state != "SKIPPED":
+                return None
+
+            # 组织自定义策略阻断
+            if "CUSTOMER_POLICY_VIOLATION" in reasons:
+                violation_detail = None
+                policy_result = detailed_answer.get("customerPolicyEnforcementResult") or {}
+                for pr in policy_result.get("policyResults") or []:
+                    armor_result = pr.get("modelArmorEnforcementResult") or {}
+                    violation_detail = armor_result.get("modelArmorViolation")
+                    if violation_detail:
+                        break
+
+                return {
+                    "type": "CUSTOMER_POLICY_VIOLATION",
+                    "title": "由于提示违反了您组织定义的安全政策，因此 Gemini Enterprise 无法回复。",
+                    "detail": violation_detail or ""
+                }
+
+            if reasons:
+                return {
+                    "type": "SKIPPED",
+                    "title": "Gemini Enterprise 未能生成回复",
+                    "detail": f"原因: {', '.join(reasons)}"
+                }
+
+            return {
+                "type": "SKIPPED",
+                "title": "Gemini Enterprise 未能生成回复",
+                "detail": "状态: SKIPPED"
+            }
+
         messages = []
         # 收集所有图片的 fileId，稍后批量获取元数据
         all_file_ids = []
+        # 收集所有用户上传文件的 sessionContextFileId
+        all_context_file_ids = []
 
         for turn in turns:
+            diagnostic_info = (
+                turn.get("diagnosticInfo")
+                or turn.get("detailedAssistAnswer", {}).get("diagnosticInfo")
+                or {}
+            )
+            planner_steps = diagnostic_info.get("plannerSteps") or []
+
+            # 时间线提取：用户时间、助手时间、思考耗时
+            query_ts = None
+            plan_times = []
+            plan_steps_detail = []
+            for step in planner_steps:
+                create_time = _parse_dt(step.get("createTime"))
+                if not create_time:
+                    continue
+                if step.get("queryStep") and not query_ts:
+                    query_ts = create_time
+                if step.get("planStep"):
+                    plan_times.append(create_time)
+                    # 收集 planStep 文本，用于思考耗时匹配
+                    parts = step.get("planStep", {}).get("parts") or []
+                    part_texts = []
+                    for p in parts:
+                        if isinstance(p, dict) and p.get("text"):
+                            part_texts.append(p["text"])
+                    combined_text = "\n".join(part_texts).strip()
+                    plan_steps_detail.append({
+                        "ts": create_time,
+                        "text": combined_text,
+                    })
+
+            user_ts = _to_iso_z(query_ts) or turn.get("createdAt", "")
+            assistant_ts = _to_iso_z(plan_times[-1]) if plan_times else turn.get("createdAt", "")
+            thinking_duration_ms = None
+            if len(plan_times) >= 2:
+                thinking_duration_ms = int((plan_times[-1] - plan_times[0]).total_seconds() * 1000)
+
             # 解析用户消息
             query = turn.get("query", {})
             query_text = query.get("text", "")
-            if query_text:
-                messages.append({
+
+            # 收集用户消息中的 contextFiles
+            context_files = query.get("contextFiles", [])
+            turn_context_file_ids = []
+            for cf in context_files:
+                file_id = cf.get("sessionContextFileId")
+                if file_id:
+                    turn_context_file_ids.append(file_id)
+                    all_context_file_ids.append(file_id)
+
+            if query_text or turn_context_file_ids:
+                user_msg = {
                     "role": "user",
                     "content": query_text,
-                    "timestamp": turn.get("createdAt", ""),
-                })
+                    "timestamp": user_ts,
+                }
+                # 暂存 contextFileIds，稍后填充完整元数据
+                if turn_context_file_ids:
+                    user_msg["_context_file_ids"] = turn_context_file_ids
+                messages.append(user_msg)
 
             # 解析 AI 回复 - 优先使用 detailedAssistAnswer
             detailed_answer = turn.get("detailedAssistAnswer", {})
             replies = detailed_answer.get("replies", [])
+
+            skipped_info = None if replies else build_skipped_message(detailed_answer)
 
             if replies:
                 # 分别收集文本、思考和图片
                 reply_texts = []
                 thoughts = []
                 turn_file_ids = []
+                matched_plan_ts = []
 
                 for reply in replies:
                     grounded_content = reply.get("groundedContent", {})
@@ -852,6 +1115,14 @@ async def get_session_messages(session_id: str, session_name: Optional[str] = No
                     if text:
                         if is_thought:
                             thoughts.append(text)
+                            # 将 planStep 文本与思考内容匹配，提取更精确的思考耗时
+                            if plan_steps_detail:
+                                normalized_thought = text.strip()
+                                for ps in plan_steps_detail:
+                                    if not ps["ts"] or not ps["text"]:
+                                        continue
+                                    if ps["text"] and (ps["text"] in normalized_thought or normalized_thought in ps["text"]):
+                                        matched_plan_ts.append(ps["ts"])
                         else:
                             reply_texts.append(text)
 
@@ -859,21 +1130,49 @@ async def get_session_messages(session_id: str, session_name: Optional[str] = No
                     msg_data = {
                         "role": "assistant",
                         "content": "\n\n".join(reply_texts) if reply_texts else "",
-                        "timestamp": turn.get("createdAt", ""),
+                        "timestamp": assistant_ts,
                     }
 
                     # 添加思考链
                     if thoughts:
                         msg_data["thoughts"] = thoughts
+                        # 优先使用与思考文本匹配的 planStep 时间
+                        if len(matched_plan_ts) >= 2:
+                            matched_plan_ts = sorted(matched_plan_ts)
+                            msg_data["thinking_duration_ms"] = (matched_plan_ts[-1] - matched_plan_ts[0]).total_seconds() * 1000
+                        elif len(matched_plan_ts) == 1 and plan_steps_detail:
+                            # 仅匹配到一个步骤时，尝试使用它之后的下一个 planStep 作为结束时间
+                            matched_ts = matched_plan_ts[0]
+                            next_ts = None
+                            sorted_steps = sorted(plan_steps_detail, key=lambda x: x["ts"] or datetime.min)
+                            for idx, ps in enumerate(sorted_steps):
+                                if ps["ts"] == matched_ts and idx + 1 < len(sorted_steps):
+                                    next_ts = sorted_steps[idx + 1]["ts"]
+                                    break
+                            if next_ts:
+                                msg_data["thinking_duration_ms"] = (next_ts - matched_ts).total_seconds() * 1000
+                            elif thinking_duration_ms is not None:
+                                msg_data["thinking_duration_ms"] = thinking_duration_ms
+                        elif thinking_duration_ms is not None:
+                            msg_data["thinking_duration_ms"] = thinking_duration_ms
 
                     # 添加图片信息（稍后填充完整元数据）
                     if turn_file_ids:
                         msg_data["images"] = turn_file_ids
 
                     messages.append(msg_data)
+            elif skipped_info:
+                messages.append({
+                    "role": "assistant",
+                    "content": "",  # 内容为空，由前端根据 error_info 渲染
+                    "timestamp": assistant_ts,
+                    "skipped": True,
+                    "error_info": skipped_info,  # 结构化错误信息
+                    "skipped_reasons": detailed_answer.get("assistSkippedReasons") or [],
+                })
 
-        # 批量获取图片元数据并更新 messages
-        if all_file_ids and full_session_name:
+        # 批量获取文件元数据并更新 messages（包括图片和用户上传的附件）
+        if (all_file_ids or all_context_file_ids) and full_session_name:
             try:
                 file_metadata = biz_client._get_session_file_metadata(full_session_name)
 
@@ -881,8 +1180,9 @@ async def get_session_messages(session_id: str, session_name: Optional[str] = No
                 # 格式: projects/.../sessions/17970885850102128104
                 api_session_id = full_session_name.split("/")[-1] if "/" in full_session_name else session_id
 
-                # 更新每条消息中的图片信息
+                # 更新每条消息中的图片信息和附件信息
                 for msg in messages:
+                    # 处理 AI 回复中的图片
                     if "images" in msg:
                         enriched_images = []
                         for img_info in msg["images"]:
@@ -911,8 +1211,42 @@ async def get_session_messages(session_id: str, session_name: Optional[str] = No
                             enriched_images.append(enriched_img)
 
                         msg["images"] = enriched_images
+
+                    # 处理用户消息中的附件（contextFiles）
+                    if "_context_file_ids" in msg:
+                        attachments = []
+                        for file_id in msg["_context_file_ids"]:
+                            meta = file_metadata.get(file_id, {})
+                            if meta:
+                                attachments.append({
+                                    "file_id": file_id,
+                                    "file_name": meta.get("name") or file_id,
+                                    "mime_type": meta.get("mimeType"),
+                                    "byte_size": meta.get("byteSize"),
+                                    "token_count": meta.get("tokenCount"),
+                                })
+                            else:
+                                # 元数据中没有找到，只保留 file_id
+                                attachments.append({
+                                    "file_id": file_id,
+                                    "file_name": file_id,
+                                })
+                        if attachments:
+                            msg["attachments"] = attachments
+                        # 删除临时字段
+                        del msg["_context_file_ids"]
+
             except Exception as e:
-                logger.warning(f"获取图片元数据失败: {e}")
+                logger.warning(f"获取文件元数据失败: {e}")
+                # 清理临时字段
+                for msg in messages:
+                    if "_context_file_ids" in msg:
+                        del msg["_context_file_ids"]
+
+        # 清理可能残留的临时字段（如果没有进入上面的 if 块）
+        for msg in messages:
+            if "_context_file_ids" in msg:
+                del msg["_context_file_ids"]
 
         return {"messages": messages}
 
@@ -968,16 +1302,47 @@ async def chat_completions(
 
     # 获取待发送的文件 ID
     pending_file_ids = session_data.get("pending_file_ids", [])
+    # 合并前端显式传入的 file_ids，避免因本地缓存丢失而未携带文件
+    combined_file_ids: list[str] = []
+    if pending_file_ids:
+        combined_file_ids.extend(pending_file_ids)
+    if request.file_ids:
+        for fid in request.file_ids:
+            if fid and fid not in combined_file_ids:
+                combined_file_ids.append(fid)
     logger.debug(f"聊天请求: session_id={session_id}, canonical_session_id={canonical_session_id}, session_name={session_data.get('session_name')}, pending_file_ids={pending_file_ids}")
+
+    # 获取文件元数据用于渲染
+    attachment_metadata: List[Dict[str, Any]] = []
+    if combined_file_ids:
+        try:
+            session_name_for_files = session_data.get("session_name")
+            metadata_map = session_data["biz_client"]._get_session_file_metadata(session_name_for_files, filter_str="") if session_name_for_files else {}
+            for fid in combined_file_ids:
+                meta = metadata_map.get(fid, {}) if metadata_map else {}
+                attachment_metadata.append({
+                    "file_id": fid,
+                    "file_name": meta.get("name") or meta.get("fileId") or fid,
+                    "mime_type": meta.get("mimeType"),
+                    "byte_size": meta.get("byteSize"),
+                    "token_count": meta.get("tokenCount"),
+                    "download_uri": meta.get("downloadUri"),
+                })
+        except Exception as e:
+            logger.warning(f"获取文件元数据失败: {e}")
+            attachment_metadata = [{"file_id": fid} for fid in pending_file_ids]
 
     # 保存用户消息
     user_message = request.messages[-1] if request.messages else None
     if user_message:
-        session_data["messages"].append({
+        user_msg_data = {
             "role": user_message.role,
             "content": user_message.content,
             "timestamp": time.time(),
-        })
+        }
+        if attachment_metadata:
+            user_msg_data["attachments"] = attachment_metadata
+        session_data["messages"].append(user_msg_data)
         # 更新会话标题（使用第一条消息）
         if len(session_data["messages"]) == 1:
             title = user_message.content[:30]
@@ -991,7 +1356,7 @@ async def chat_completions(
         async def generate():
             try:
                 # 传递 file_ids 并在发送后清空
-                file_ids_to_send = pending_file_ids.copy()
+                file_ids_to_send = combined_file_ids.copy()
                 session_data["pending_file_ids"] = []
 
                 response = client.chat.completions.create(
@@ -1047,7 +1412,7 @@ async def chat_completions(
     else:
         try:
             # 传递 file_ids 并在发送后清空
-            file_ids_to_send = pending_file_ids.copy()
+            file_ids_to_send = combined_file_ids.copy()
             session_data["pending_file_ids"] = []
 
             response = client.chat.completions.create(
@@ -1530,7 +1895,11 @@ async def browser_websocket(websocket: WebSocket) -> None:
     await websocket.accept()
 
     browser_service = get_browser_service()
-    session = await browser_service.create_session()
+    # 解析可选参数
+    start_url = websocket.query_params.get("start_url")
+    use_profile = websocket.query_params.get("use_profile", "0").lower() in ("1", "true", "yes", "on")
+
+    session = await browser_service.create_session(start_url=start_url, use_profile_dir=use_profile)
 
     # 消息发送回调
     async def send_message(message: dict) -> None:
@@ -1634,7 +2003,7 @@ async def browser_websocket(websocket: WebSocket) -> None:
 
 
 @app.post("/api/browser/start")
-async def start_browser() -> dict:
+async def start_browser(use_profile: bool = False, start_url: Optional[str] = None) -> dict:
     """启动远程浏览器（REST API 方式）"""
     browser_service = get_browser_service()
     session = await browser_service.get_active_session()
@@ -1647,7 +2016,7 @@ async def start_browser() -> dict:
             "message": "浏览器已在运行"
         }
 
-    session = await browser_service.create_session()
+    session = await browser_service.create_session(start_url=start_url, use_profile_dir=use_profile)
     return {
         "success": True,
         "session_id": session.session_id,
@@ -1835,6 +2204,159 @@ async def keep_alive_stop() -> dict:
         return {"success": True, "message": "服务未运行"}
     await service.stop()
     return {"success": True, "message": "服务已停止"}
+
+
+# ==================== 浏览器保活服务 ====================
+
+@app.get("/api/browser-keep-alive/status")
+async def browser_keep_alive_status() -> dict:
+    """获取浏览器保活服务状态"""
+    config = load_config()
+    browser_config = config.get("browser_keep_alive", {})
+
+    if not browser_config.get("enabled", False):
+        return {
+            "enabled": False,
+            "message": "浏览器保活服务未启用，可在 config.json 中设置 browser_keep_alive.enabled = true",
+        }
+
+    service = get_browser_keep_alive_service()
+    status = service.get_status()
+    status["enabled"] = True
+    return status
+
+
+@app.post("/api/browser-keep-alive/start")
+async def browser_keep_alive_start() -> dict:
+    """启动浏览器保活服务"""
+    config = load_config()
+    browser_config = config.get("browser_keep_alive", {})
+
+    service = get_browser_keep_alive_service(
+        interval_minutes=browser_config.get("interval_minutes", 60),
+        headless=browser_config.get("headless", True),
+    )
+
+    if service._running:
+        return {"success": True, "message": "服务已在运行"}
+
+    await service.start()
+    return {"success": True, "message": "浏览器保活服务已启动"}
+
+
+@app.post("/api/browser-keep-alive/stop")
+async def browser_keep_alive_stop() -> dict:
+    """停止浏览器保活服务"""
+    service = get_browser_keep_alive_service()
+    if not service._running:
+        return {"success": True, "message": "服务未运行"}
+    await service.stop()
+    return {"success": True, "message": "浏览器保活服务已停止"}
+
+
+@app.post("/api/browser-keep-alive/refresh")
+async def browser_keep_alive_refresh_now() -> dict:
+    """立即执行一次浏览器保活刷新"""
+    service = get_browser_keep_alive_service()
+    result = await service.refresh_now()
+    return result
+
+
+# ==================== Cookie 刷新 ====================
+
+@app.post("/api/cookie/refresh")
+async def refresh_cookie(headless: bool = True) -> dict:
+    """手动刷新 Cookie（通过浏览器）
+
+    Args:
+        headless: 是否无头模式，默认 True
+
+    Returns:
+        {
+            "success": bool,
+            "message": str,
+            "needs_manual_login": bool,  # 是否需要手动登录
+        }
+    """
+    try:
+        result = await try_refresh_cookie_via_browser(headless=headless)
+        return result
+    except Exception as e:
+        logger.error(f"刷新 Cookie 失败: {e}")
+        return {
+            "success": False,
+            "message": str(e),
+            "needs_manual_login": False,
+        }
+
+
+@app.get("/api/cookie/status")
+async def cookie_status() -> dict:
+    """获取 Cookie 状态"""
+    from biz_gemini.config import get_account_state, is_in_cooldown
+
+    config = load_config()
+    account_state = get_account_state()
+    in_cooldown, cooldown_remaining = is_in_cooldown()
+
+    # 获取 Cookie 保存时间
+    cookies_saved_at = config.get("cookies_saved_at") or config.get("session", {}).get("cookies_saved_at")
+    age_seconds = cookies_age_seconds(config)
+
+    return {
+        "has_credentials": bool(config.get("secure_c_ses") and config.get("csesidx")),
+        "cookie_expired": is_cookie_expired(),
+        "cookies_saved_at": cookies_saved_at,
+        "age_seconds": age_seconds,
+        "age_hours": round(age_seconds / 3600, 2) if age_seconds else None,
+        "available": account_state.get("available", True),
+        "in_cooldown": in_cooldown,
+        "cooldown_remaining_seconds": round(cooldown_remaining, 0) if in_cooldown else 0,
+        "cooldown_reason": account_state.get("cooldown_reason", ""),
+        "jwt_cached": bool(account_state.get("jwt")),
+        "jwt_expires_at": account_state.get("jwt_expires_at", 0),
+    }
+
+
+@app.post("/api/cookie/mark-valid")
+async def mark_cookie_valid_endpoint() -> dict:
+    """手动标记 Cookie 为有效（用于调试）"""
+    from biz_gemini.config import mark_cookie_valid as _mark_valid
+
+    _mark_valid()
+    return {"success": True, "message": "Cookie 已标记为有效"}
+
+
+@app.get("/api/debug/getoxsrf")
+async def debug_getoxsrf() -> dict:
+    """调试端点：测试 getoxsrf 接口"""
+    config = load_config()
+    csesidx = config.get("csesidx")
+
+    if not csesidx:
+        return {"error": "缺少 csesidx"}
+
+    url = f"{GETOXSRF_URL}?csesidx={csesidx}"
+
+    try:
+        resp, debug_info = request_getoxsrf(config, allow_minimal_retry=True)
+
+        return {
+            "url": url,
+            "status_code": resp.status_code,
+            "headers": dict(resp.headers),
+            "response_preview": resp.text[:500] if resp.text else "",
+            "cookie_debug": debug_info,
+            "proxy_used": debug_info.get("proxy_used"),
+        }
+    except Exception as e:
+        from biz_gemini.auth import _build_cookie_header
+
+        cookie_str, cookie_debug = _build_cookie_header(config)
+        return {
+            "error": str(e),
+            "cookie_debug": cookie_debug,
+        }
 
 
 # ==================== 版本管理 ====================
