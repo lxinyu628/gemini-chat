@@ -370,6 +370,7 @@ body {
   width: 100%;
   margin: 0 auto;
   padding: 0 16px;
+  overflow-x: hidden;
 }
 
 .message {
@@ -887,7 +888,8 @@ body {
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
-  min-width: 280px;
+  min-width: 240px;
+  max-width: 90vw;
   max-height: 400px;
   overflow-y: auto;
   z-index: 10000;
@@ -1498,6 +1500,9 @@ body {
   background-color: #1e1e1e;
   border-radius: var(--radius-md);
   overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-width: 100%;
 }
 
 .message-text pre code {
@@ -1647,6 +1652,23 @@ body {
   .message-bubble {
     padding: 10px 12px;
     max-width: 100%;
+  }
+
+  .input-toolbar {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .toolbar-left,
+  .toolbar-right {
+    width: 100%;
+    justify-content: flex-start;
+    gap: 8px;
+  }
+
+  .model-dropdown {
+    min-width: 220px;
+    max-width: 92vw;
   }
 
   .input-area {
