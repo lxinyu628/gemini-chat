@@ -835,7 +835,7 @@ async function loadConversation(sessionId, sessionName = null) {
           thinking = msg.thinking;
         }
         // 传递 error_info 和 skipped 标志
-        appendMessage(msg.role, msg.content, msg.images, thinking, msg.error_info, msg.skipped, msg.attachments);
+        appendMessage(msg.role, msg.content, msg.images, thinking, msg.error_info, msg.skipped, msg.attachments, msg.timestamp);
       });
     } else {
       elements.welcomeScreen.style.display = 'flex';
@@ -996,7 +996,7 @@ async function sendMessage() {
   }
 
   // 显示用户消息（包含文件信息）
-  appendMessage('user', displayMessage || '', null, null, null, false, pendingAttachments);
+  appendMessage('user', displayMessage || '', null, null, null, false, pendingAttachments, new Date().toISOString());
 
   // 清空输入
   elements.messageInput.value = '';
@@ -1034,7 +1034,7 @@ async function sendMessage() {
     removeTypingIndicator(loadingId);
 
     // 预创建助手消息占位
-    const assistantMsgDiv = appendMessage('assistant', '');
+    const assistantMsgDiv = appendMessage('assistant', '', null, null, null, false, null, new Date().toISOString());
     const textEl = assistantMsgDiv.querySelector('.message-text');
 
     const decoder = new TextDecoder();
@@ -1119,7 +1119,7 @@ async function sendMessage() {
     if (error.message.includes('401') || error.message.includes('过期')) {
       showExpiredModal();
     } else {
-      appendMessage('assistant', `错误: ${error.message}`);
+      appendMessage('assistant', `错误: ${error.message}`, null, null, null, false, null, new Date().toISOString());
     }
   }
 }
@@ -1182,7 +1182,7 @@ function parseUserMessageFileInfo(content) {
 }
 
 // 消息显示
-function appendMessage(role, content, images = null, thinking = null, errorInfo = null, isSkipped = false, attachments = null) {
+function appendMessage(role, content, images = null, thinking = null, errorInfo = null, isSkipped = false, attachments = null, timestampIso = null) {
   const messageDiv = document.createElement('div');
   messageDiv.className = `message ${role}`;
 
@@ -1460,13 +1460,10 @@ function appendMessage(role, content, images = null, thinking = null, errorInfo 
     contentDiv.appendChild(actionsDiv);
   }
 
-  const timestamp = document.createElement('div');
-  timestamp.className = 'message-timestamp';
-  timestamp.textContent = new Date().toLocaleTimeString('zh-CN', {
-    hour: '2-digit',
-    minute: '2-digit'
-  });
-  contentDiv.appendChild(timestamp);
+  const tsDiv = document.createElement('div');
+  tsDiv.className = 'message-timestamp';
+  tsDiv.textContent = formatTimestamp(timestampIso);
+  contentDiv.appendChild(tsDiv);
 
   messageDiv.appendChild(avatar);
   messageDiv.appendChild(contentDiv);
@@ -1591,6 +1588,10 @@ function showTypingIndicator() {
   const contentDiv = document.createElement('div');
   contentDiv.className = 'message-content';
 
+  const tsDiv = document.createElement('div');
+  tsDiv.className = 'message-timestamp';
+  tsDiv.textContent = formatTimestamp();
+
   // 显示"正在思考"的动画效果
   const thinkingIndicator = document.createElement('div');
   thinkingIndicator.className = 'thinking-indicator';
@@ -1600,6 +1601,7 @@ function showTypingIndicator() {
   `;
 
   contentDiv.appendChild(thinkingIndicator);
+  contentDiv.appendChild(tsDiv);
   messageDiv.appendChild(avatar);
   messageDiv.appendChild(contentDiv);
 
@@ -1621,6 +1623,20 @@ function scrollToBottom() {
 }
 
 // 工具函数
+function formatTimestamp(ts) {
+  const d = ts ? new Date(ts) : new Date();
+  if (Number.isNaN(d.getTime())) return '';
+
+  const pad = (n) => String(n).padStart(2, '0');
+  const yyyy = d.getFullYear();
+  const mm = pad(d.getMonth() + 1);
+  const dd = pad(d.getDate());
+  const hh = pad(d.getHours());
+  const min = pad(d.getMinutes());
+  const ss = pad(d.getSeconds());
+  return `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
+}
+
 function formatFileSize(bytes) {
   if (!bytes || isNaN(bytes)) return '';
   const units = ['B', 'KB', 'MB', 'GB'];
@@ -1641,7 +1657,7 @@ function escapeHtml(text) {
 }
 
 function showError(message) {
-  appendMessage('assistant', `错误: ${message}`);
+  appendMessage('assistant', `错误: ${message}`, null, null, null, false, null, new Date().toISOString());
 }
 
 // ==================== 远程浏览器登录 ====================
