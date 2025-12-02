@@ -437,7 +437,8 @@ const elements = {
   themeToggle: document.getElementById('themeToggle'),
   sidebarBackdrop: document.getElementById('sidebarBackdrop'),
   statusIndicator: document.getElementById('statusIndicator'),
-  expiredModal: document.getElementById('expiredModal')
+  expiredModal: document.getElementById('expiredModal'),
+  versionInfo: document.getElementById('versionInfo')
 };
 
 // 模型列表缓存
@@ -452,6 +453,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadConversations();
   checkStatus();
   startStatusMonitoring();
+  loadVersionInfo();
 });
 
 // 主题切换
@@ -615,6 +617,18 @@ async function checkStatus() {
 function startStatusMonitoring() {
   // 每分钟检查一次状态
   state.statusCheckInterval = setInterval(checkStatus, 60000);
+}
+
+async function loadVersionInfo() {
+  try {
+    const response = await fetch('/api/version');
+    const data = await response.json();
+    if (elements.versionInfo && data.version) {
+      elements.versionInfo.textContent = `v${data.version}`;
+    }
+  } catch (error) {
+    console.error('获取版本信息失败:', error);
+  }
 }
 
 function showExpiredModal() {
