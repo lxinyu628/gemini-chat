@@ -1162,7 +1162,8 @@ function createThinkingBlock(thinking, isActive = false, thinkingDurationMs = nu
     block.classList.toggle('expanded');
     const titleSpan = header.querySelector('.thinking-title');
     if (!isActive && titleSpan) {
-      titleSpan.textContent = block.classList.contains('expanded') ? '隐藏思考过程' : '显示思考过程';
+      const base = block.classList.contains('expanded') ? '隐藏思考过程' : '显示思考过程';
+      titleSpan.textContent = `${base}${durationText}`;
     }
   });
 
