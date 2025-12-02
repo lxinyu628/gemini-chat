@@ -835,7 +835,7 @@ async function loadConversation(sessionId, sessionName = null) {
           thinking = msg.thinking;
         }
         // 传递 error_info 和 skipped 标志
-        appendMessage(msg.role, msg.content, msg.images, thinking, msg.error_info, msg.skipped, msg.attachments, msg.timestamp);
+        appendMessage(msg.role, msg.content, msg.images, thinking, msg.error_info, msg.skipped, msg.attachments, msg.timestamp, msg.thinking_duration_ms);
       });
     } else {
       elements.welcomeScreen.style.display = 'flex';
@@ -1125,15 +1125,18 @@ async function sendMessage() {
 }
 
 // 创建思考链显示块
-function createThinkingBlock(thinking, isActive = false) {
+function createThinkingBlock(thinking, isActive = false, thinkingDurationMs = null) {
   const block = document.createElement('div');
   block.className = 'thinking-block';
 
   const header = document.createElement('div');
   header.className = 'thinking-header';
+  const durationText = thinkingDurationMs != null
+    ? ` · 已思考${(Math.max(0, thinkingDurationMs) / 1000).toFixed(2)}s`
+    : '';
   header.innerHTML = `
     <i data-lucide="sparkles" class="thinking-icon${isActive ? ' spinning' : ''}"></i>
-    <span class="thinking-title${isActive ? ' thinking-active' : ''}">${isActive ? '正在思考...' : '显示思考过程'}</span>
+    <span class="thinking-title${isActive ? ' thinking-active' : ''}">${isActive ? '正在思考...' : '显示思考过程'}${durationText}</span>
     <i data-lucide="chevron-down" class="thinking-chevron"></i>
   `;
 
@@ -1182,7 +1185,7 @@ function parseUserMessageFileInfo(content) {
 }
 
 // 消息显示
-function appendMessage(role, content, images = null, thinking = null, errorInfo = null, isSkipped = false, attachments = null, timestampIso = null) {
+function appendMessage(role, content, images = null, thinking = null, errorInfo = null, isSkipped = false, attachments = null, timestampIso = null, thinkingDurationMs = null) {
   const messageDiv = document.createElement('div');
   messageDiv.className = `message ${role}`;
 
@@ -1195,7 +1198,7 @@ function appendMessage(role, content, images = null, thinking = null, errorInfo 
 
   // 如果有思考链，先显示思考链
   if (role === 'assistant' && thinking) {
-    const thinkingBlock = createThinkingBlock(thinking);
+    const thinkingBlock = createThinkingBlock(thinking, false, thinkingDurationMs);
     contentDiv.appendChild(thinkingBlock);
   }
 

@@ -3,7 +3,7 @@ import json
 import os
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import quote_plus
 from typing import Any, Dict, List, Optional, Union
 
@@ -930,6 +930,20 @@ async def delete_session(session_id: str) -> dict:
 @app.get("/api/sessions/{session_id}/messages")
 async def get_session_messages(session_id: str, session_name: Optional[str] = None) -> dict:
     """获取会话消息历史 - 优先本地存储，其次调用 Google API"""
+    def _parse_dt(ts: Optional[str]) -> Optional[datetime]:
+        if not ts:
+            return None
+        try:
+            # 兼容末尾 Z
+            return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    def _to_iso_z(dt_obj: Optional[datetime]) -> str:
+        if not dt_obj:
+            return ""
+        return dt_obj.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
     # 1. 优先从本地存储获取
     if session_id in sessions:
         local_messages = sessions[session_id].get("messages", [])
@@ -1005,6 +1019,43 @@ async def get_session_messages(session_id: str, session_name: Optional[str] = No
         all_context_file_ids = []
 
         for turn in turns:
+            diagnostic_info = (
+                turn.get("diagnosticInfo")
+                or turn.get("detailedAssistAnswer", {}).get("diagnosticInfo")
+                or {}
+            )
+            planner_steps = diagnostic_info.get("plannerSteps") or []
+
+            # 时间线提取：用户时间、助手时间、思考耗时
+            query_ts = None
+            plan_times = []
+            plan_steps_detail = []
+            for step in planner_steps:
+                create_time = _parse_dt(step.get("createTime"))
+                if not create_time:
+                    continue
+                if step.get("queryStep") and not query_ts:
+                    query_ts = create_time
+                if step.get("planStep"):
+                    plan_times.append(create_time)
+                    # 收集 planStep 文本，用于思考耗时匹配
+                    parts = step.get("planStep", {}).get("parts") or []
+                    part_texts = []
+                    for p in parts:
+                        if isinstance(p, dict) and p.get("text"):
+                            part_texts.append(p["text"])
+                    combined_text = "\n".join(part_texts).strip()
+                    plan_steps_detail.append({
+                        "ts": create_time,
+                        "text": combined_text,
+                    })
+
+            user_ts = _to_iso_z(query_ts) or turn.get("createdAt", "")
+            assistant_ts = _to_iso_z(plan_times[-1]) if plan_times else turn.get("createdAt", "")
+            thinking_duration_ms = None
+            if len(plan_times) >= 2:
+                thinking_duration_ms = int((plan_times[-1] - plan_times[0]).total_seconds() * 1000)
+
             # 解析用户消息
             query = turn.get("query", {})
             query_text = query.get("text", "")
@@ -1022,7 +1073,7 @@ async def get_session_messages(session_id: str, session_name: Optional[str] = No
                 user_msg = {
                     "role": "user",
                     "content": query_text,
-                    "timestamp": turn.get("createdAt", ""),
+                    "timestamp": user_ts,
                 }
                 # 暂存 contextFileIds，稍后填充完整元数据
                 if turn_context_file_ids:
@@ -1040,6 +1091,7 @@ async def get_session_messages(session_id: str, session_name: Optional[str] = No
                 reply_texts = []
                 thoughts = []
                 turn_file_ids = []
+                matched_plan_ts = []
 
                 for reply in replies:
                     grounded_content = reply.get("groundedContent", {})
@@ -1063,6 +1115,14 @@ async def get_session_messages(session_id: str, session_name: Optional[str] = No
                     if text:
                         if is_thought:
                             thoughts.append(text)
+                            # 将 planStep 文本与思考内容匹配，提取更精确的思考耗时
+                            if plan_steps_detail:
+                                normalized_thought = text.strip()
+                                for ps in plan_steps_detail:
+                                    if not ps["ts"] or not ps["text"]:
+                                        continue
+                                    if ps["text"] and (ps["text"] in normalized_thought or normalized_thought in ps["text"]):
+                                        matched_plan_ts.append(ps["ts"])
                         else:
                             reply_texts.append(text)
 
@@ -1070,12 +1130,18 @@ async def get_session_messages(session_id: str, session_name: Optional[str] = No
                     msg_data = {
                         "role": "assistant",
                         "content": "\n\n".join(reply_texts) if reply_texts else "",
-                        "timestamp": turn.get("createdAt", ""),
+                        "timestamp": assistant_ts,
                     }
 
                     # 添加思考链
                     if thoughts:
                         msg_data["thoughts"] = thoughts
+                        # 优先使用与思考文本匹配的 planStep 时间
+                        if len(matched_plan_ts) >= 2:
+                            matched_plan_ts = sorted(matched_plan_ts)
+                            msg_data["thinking_duration_ms"] = (matched_plan_ts[-1] - matched_plan_ts[0]).total_seconds() * 1000
+                        elif thinking_duration_ms is not None:
+                            msg_data["thinking_duration_ms"] = thinking_duration_ms
 
                     # 添加图片信息（稍后填充完整元数据）
                     if turn_file_ids:
@@ -1086,7 +1152,7 @@ async def get_session_messages(session_id: str, session_name: Optional[str] = No
                 messages.append({
                     "role": "assistant",
                     "content": "",  # 内容为空，由前端根据 error_info 渲染
-                    "timestamp": turn.get("createdAt", ""),
+                    "timestamp": assistant_ts,
                     "skipped": True,
                     "error_info": skipped_info,  # 结构化错误信息
                     "skipped_reasons": detailed_answer.get("assistSkippedReasons") or [],
