@@ -721,8 +721,12 @@ function openModelDropdown() {
 
   // 定位浮窗
   const rect = elements.modelSelector.getBoundingClientRect();
-  modelDropdown.style.left = rect.left + 'px';
-  modelDropdown.style.bottom = (window.innerHeight - rect.top + 8) + 'px';
+  const dropdownRect = modelDropdown.getBoundingClientRect();
+  const padding = 12;
+  const maxLeft = window.innerWidth - dropdownRect.width - padding;
+  const left = Math.max(padding, Math.min(rect.left, maxLeft));
+  modelDropdown.style.left = `${left}px`;
+  modelDropdown.style.bottom = `${window.innerHeight - rect.top + 8}px`;
 
   // 显示动画
   requestAnimationFrame(() => {

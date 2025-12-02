@@ -1661,7 +1661,6 @@ body {
 
   .toolbar-left,
   .toolbar-right {
-    width: 100%;
     justify-content: flex-start;
     gap: 8px;
   }
