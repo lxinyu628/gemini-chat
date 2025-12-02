@@ -92,6 +92,17 @@ body {
   opacity: 0;
 }
 
+.sidebar-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(2px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+  z-index: 50;
+}
+
 .sidebar-header {
   padding: 16px 12px;
 }
@@ -1534,6 +1545,60 @@ body {
 }
 
 /* 响应式设计 */
+@media (max-width: 1024px) {
+  .sidebar {
+    width: var(--sidebar-width);
+    min-width: var(--sidebar-width);
+    max-width: var(--sidebar-width);
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 200;
+    transform: translateX(-100%);
+    box-shadow: var(--shadow-lg);
+    transition: transform 0.25s ease, opacity 0.25s ease;
+  }
+
+  body.sidebar-open .sidebar {
+    transform: translateX(0);
+  }
+
+  body.sidebar-open .sidebar-backdrop {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  body.sidebar-open {
+    overflow: hidden;
+  }
+
+  .sidebar.hidden {
+    /* 在移动端隐藏类不生效，交给 transform 控制 */
+    width: var(--sidebar-width);
+    min-width: var(--sidebar-width);
+    max-width: var(--sidebar-width);
+    opacity: 1;
+  }
+
+  .top-bar {
+    gap: 8px;
+    padding: 0 12px;
+  }
+
+  .main-content {
+    margin-left: 0;
+  }
+
+  .messages-container {
+    padding: 0 12px;
+  }
+
+  .message-bubble {
+    max-width: 90%;
+  }
+}
+
 @media (max-width: 768px) {
   .sidebar {
     position: fixed;
@@ -1558,6 +1623,30 @@ body {
 
   .chat-container {
     padding: 16px;
+  }
+
+  .messages-container {
+    padding: 0 8px;
+  }
+
+  .message {
+    gap: 10px;
+  }
+
+  .message-avatar {
+    width: 28px;
+    height: 28px;
+    font-size: 13px;
+    margin-top: 2px;
+  }
+
+  .message-content {
+    max-width: 100%;
+  }
+
+  .message-bubble {
+    padding: 10px 12px;
+    max-width: 100%;
   }
 
   .input-area {

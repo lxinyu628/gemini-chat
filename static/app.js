@@ -435,6 +435,7 @@ const elements = {
   modelSelector: document.getElementById('modelSelector'),
   modelName: document.getElementById('modelName'),
   themeToggle: document.getElementById('themeToggle'),
+  sidebarBackdrop: document.getElementById('sidebarBackdrop'),
   statusIndicator: document.getElementById('statusIndicator'),
   expiredModal: document.getElementById('expiredModal')
 };
@@ -446,6 +447,7 @@ let modelsList = [];
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
   initEventListeners();
+  handleResponsiveSidebar();
   loadModels();
   loadConversations();
   checkStatus();
@@ -463,10 +465,26 @@ function toggleTheme() {
   document.documentElement.setAttribute('data-theme', state.theme);
 }
 
+function handleResponsiveSidebar() {
+  const isMobile = window.innerWidth <= 1024;
+  if (isMobile) {
+    document.body.classList.remove('sidebar-open');
+    elements.sidebar.classList.remove('hidden');
+  } else {
+    document.body.classList.remove('sidebar-open');
+    elements.sidebar.classList.remove('hidden');
+  }
+}
+
 // 事件监听
 function initEventListeners() {
   elements.themeToggle.addEventListener('click', toggleTheme);
   elements.sidebarToggle.addEventListener('click', toggleSidebar);
+  if (elements.sidebarBackdrop) {
+    elements.sidebarBackdrop.addEventListener('click', () => {
+      document.body.classList.remove('sidebar-open');
+    });
+  }
   elements.newChatBtn.addEventListener('click', createNewConversation);
   elements.sendBtn.addEventListener('click', sendMessage);
   elements.attachBtn.addEventListener('click', () => elements.fileInput.click());
@@ -477,6 +495,7 @@ function initEventListeners() {
     e.stopPropagation();
     toggleModelDropdown();
   });
+  window.addEventListener('resize', handleResponsiveSidebar);
 
   // 输入框自动调整高度
   const messageInput = elements.messageInput;
@@ -525,7 +544,18 @@ function initEventListeners() {
 }
 
 function toggleSidebar() {
-  elements.sidebar.classList.toggle('hidden');
+  const isMobile = window.innerWidth <= 1024;
+  if (isMobile) {
+    document.body.classList.toggle('sidebar-open');
+  } else {
+    elements.sidebar.classList.toggle('hidden');
+  }
+}
+
+function closeSidebarOnMobile() {
+  if (window.innerWidth <= 1024) {
+    document.body.classList.remove('sidebar-open');
+  }
 }
 
 function updateSendButton() {
@@ -793,6 +823,7 @@ async function createNewConversation() {
 
     state.currentConversationId = data.session_id;
     state.currentSessionName = data.session_name || null;  // 保存完整 session name
+    closeSidebarOnMobile();
     elements.messagesContainer.innerHTML = '';
     elements.welcomeScreen.style.display = 'flex';
     elements.messageInput.value = '';
@@ -809,6 +840,7 @@ async function loadConversation(sessionId, sessionName = null) {
   try {
     state.currentConversationId = sessionId;
     state.currentSessionName = sessionName;  // 保存完整 session name
+    closeSidebarOnMobile();
 
     // 构建 URL，包含 session_name 参数（如果有）
     let url = `/api/sessions/${sessionId}/messages`;
