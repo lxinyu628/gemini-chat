@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import uuid
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -252,6 +253,10 @@ class BizGeminiClient:
         proxy = get_proxy(config)
         self._proxies = {"http": proxy, "https": proxy} if proxy else None
         self._session_name: Optional[str] = None
+        # 简单的文件元数据缓存，减少重复请求带来的延迟
+        # key: (session_name, filter_str) -> {"ts": float, "data": dict}
+        self._file_metadata_cache: dict = {}
+        self._file_metadata_ttl = 60  # 秒
 
     @property
     def session_name(self) -> str:
@@ -667,6 +672,11 @@ class BizGeminiClient:
                        可选值: "file_origin_type = AI_GENERATED" 只获取 AI 生成的文件
                               "file_origin_type = USER_UPLOADED" 只获取用户上传的文件
         """
+        cache_key = (session_name, filter_str or "")
+        cache_hit = self._file_metadata_cache.get(cache_key)
+        if cache_hit and time.time() - cache_hit["ts"] < self._file_metadata_ttl:
+            return cache_hit["data"]
+
         # 构造可能的 session name 取值，兼容多种格式
         session_candidates: List[str] = []
         normalized_session_name = session_name
@@ -777,6 +787,13 @@ class BizGeminiClient:
                 logger.debug(f"_get_session_file_metadata list_sessions fallback error: {e}")
 
         if result:
+            # 写入缓存（同时缓存原始 session_name，以避免重复请求）
+            self._file_metadata_cache[cache_key] = {"ts": time.time(), "data": result}
+            # 也缓存 metadata 中返回的完整 session 路径，方便下次命中
+            for fm in result.values():
+                if fm.get("session"):
+                    alt_key = (fm["session"], filter_str or "")
+                    self._file_metadata_cache[alt_key] = {"ts": time.time(), "data": result}
             return result
 
         if last_status and last_status != 200:
@@ -1038,7 +1055,7 @@ class BizGeminiClient:
             try:
                 logger.debug(f"[chat_full] current_session={current_session}")
                 logger.debug(f"[chat_full] file_ids={file_ids}")
-                file_metadata = self._get_session_file_metadata(current_session)
+                file_metadata = self._get_session_file_metadata(current_session, filter_str="file_origin_type = AI_GENERATED")
                 logger.debug(f"[chat_full] file_metadata keys={list(file_metadata.keys())}")
                 if debug and file_metadata:
                     logger.debug("文件元数据:")

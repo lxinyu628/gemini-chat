@@ -1235,7 +1235,13 @@ async def get_session_messages(session_id: str, session_name: Optional[str] = No
         # 批量获取文件元数据并更新 messages（包括图片和用户上传的附件）
         if (all_file_ids or all_context_file_ids) and full_session_name:
             try:
-                file_metadata = biz_client._get_session_file_metadata(full_session_name)
+                file_metadata: dict = {}
+                # 优先获取 AI 生成的文件（通常是图片）
+                if all_file_ids:
+                    file_metadata.update(biz_client._get_session_file_metadata(full_session_name, filter_str="file_origin_type = AI_GENERATED"))
+                # 用户上传的上下文文件需要 USER_UPLOADED
+                if all_context_file_ids:
+                    file_metadata.update(biz_client._get_session_file_metadata(full_session_name, filter_str="file_origin_type = USER_UPLOADED"))
                 logger.debug(f"[get_session_messages] full_session_name={full_session_name}")
                 logger.debug(f"[get_session_messages] all_file_ids={all_file_ids}")
                 logger.debug(f"[get_session_messages] file_metadata keys={list(file_metadata.keys())}")
