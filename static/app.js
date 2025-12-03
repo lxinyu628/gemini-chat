@@ -1105,18 +1105,8 @@ async function sendMessage () {
     // 移除加载提示，准备渲染流式内容
     removeTypingIndicator(loadingId);
 
-    // 预创建助手消息占位
-    assistantMsgDiv = appendMessage('assistant', '', null, null, null, false, null, new Date().toISOString());
-    const textEl = assistantMsgDiv.querySelector('.message-text');
-    contentDiv = assistantMsgDiv.querySelector('.message-content');
-
-    if (contentDiv) {
-      thinkingBlock = createThinkingBlock('正在思考...', true, null);
-      contentDiv.insertBefore(thinkingBlock, contentDiv.firstChild);
-      if (typeof lucide !== 'undefined') {
-        lucide.createIcons({ nodes: [thinkingBlock] });
-      }
-    }
+    // 延迟创建助手消息占位，等待有实际内容时再创建
+    let textEl = null;
 
     const decoder = new TextDecoder();
     const reader = response.body.getReader();
@@ -1125,6 +1115,8 @@ async function sendMessage () {
     let imagesData = null;
     let thinkingParts = [];
     let done = false;
+
+    let thinkingStartTime = null;
 
     const appendStreamChunk = (dataStr) => {
       if (dataStr === '[DONE]') {
@@ -1148,21 +1140,52 @@ async function sendMessage () {
       const deltaThought = delta.thought || '';
       const messageThoughts = payload.thoughts || payload.choices?.[0]?.message?.thoughts;
 
-      if (deltaContent) {
-        fullText += deltaContent;
-        if (textEl) {
-          textEl.textContent = fullText;
-        }
+      // 调试日志
+      if (deltaContent || deltaThought || messageThoughts) {
+        console.log('[STREAM] chunk:', { deltaContent: deltaContent.slice(0, 50), deltaThought, messageThoughts, assistantMsgDiv: !!assistantMsgDiv });
       }
 
+      // 收集思考内容
       if (deltaThought) {
+        if (!thinkingStartTime) {
+          thinkingStartTime = Date.now();
+        }
         thinkingParts.push(deltaThought);
       }
       if (messageThoughts) {
+        if (!thinkingStartTime) {
+          thinkingStartTime = Date.now();
+        }
         if (Array.isArray(messageThoughts)) {
           thinkingParts.push(...messageThoughts);
         } else {
           thinkingParts.push(messageThoughts);
+        }
+      }
+
+      // 当有思考内容或正文内容时，确保消息气泡已创建
+      const hasNewContent = deltaContent || deltaThought || messageThoughts;
+      if (hasNewContent && !assistantMsgDiv) {
+        // 首次收到内容，创建消息气泡
+        assistantMsgDiv = appendMessage('assistant', '', null, null, null, false, null, new Date().toISOString());
+        textEl = assistantMsgDiv.querySelector('.message-text');
+        contentDiv = assistantMsgDiv.querySelector('.message-content');
+
+        // 添加思考块（初始状态为"正在思考..."）
+        if (contentDiv) {
+          thinkingBlock = createThinkingBlock('正在思考...', true, null);
+          contentDiv.insertBefore(thinkingBlock, contentDiv.firstChild);
+          if (typeof lucide !== 'undefined') {
+            lucide.createIcons({ nodes: [thinkingBlock] });
+          }
+        }
+      }
+
+      // 更新正文内容
+      if (deltaContent) {
+        fullText += deltaContent;
+        if (textEl) {
+          textEl.textContent = fullText;
         }
       }
 
@@ -1175,10 +1198,23 @@ async function sendMessage () {
       const { value, done: streamDone } = await reader.read();
       buffer += decoder.decode(value || new Uint8Array(), { stream: !streamDone });
 
+      // 处理 SSE 事件，支持 \n\n 和 \r\n\r\n 分隔符
       let idx;
-      while ((idx = buffer.indexOf('\n\n')) !== -1) {
+      let sepLen = 2;
+      while (true) {
+        const idx1 = buffer.indexOf('\n\n');
+        const idx2 = buffer.indexOf('\r\n\r\n');
+        if (idx1 === -1 && idx2 === -1) break;
+        // 选择最先出现的分隔符
+        if (idx1 !== -1 && (idx2 === -1 || idx1 < idx2)) {
+          idx = idx1;
+          sepLen = 2;
+        } else {
+          idx = idx2;
+          sepLen = 4;
+        }
         const rawEvent = buffer.slice(0, idx).trim();
-        buffer = buffer.slice(idx + 2);
+        buffer = buffer.slice(idx + sepLen);
         if (!rawEvent.startsWith('data:')) continue;
         const dataStr = rawEvent.slice(5).trim();
         if (!dataStr) continue;
@@ -1200,9 +1236,12 @@ async function sendMessage () {
     }
 
     const thinkingContent = thinkingParts.length > 0 ? thinkingParts.join('\n') : null;
+    // 计算思考耗时
+    const thinkingDuration = thinkingStartTime ? Date.now() - thinkingStartTime : null;
+
     if (contentDiv && thinkingBlock) {
       if (thinkingContent) {
-        const newBlock = createThinkingBlock(thinkingContent, false, null);
+        const newBlock = createThinkingBlock(thinkingContent, false, thinkingDuration);
         thinkingBlock.replaceWith(newBlock);
         thinkingBlock = newBlock;
       } else {
@@ -1793,7 +1832,23 @@ function scrollToBottom () {
 
 // 工具函数
 function formatTimestamp (ts) {
-  const d = ts ? new Date(ts) : new Date();
+  let d;
+  if (!ts) {
+    d = new Date();
+  } else if (typeof ts === 'number') {
+    // 如果是数字，判断是秒还是毫秒
+    // Unix 时间戳（秒）通常小于 10^12，毫秒时间戳大于 10^12
+    if (ts < 1e12) {
+      d = new Date(ts * 1000); // 秒转毫秒
+    } else {
+      d = new Date(ts);
+    }
+  } else if (typeof ts === 'string') {
+    d = new Date(ts);
+  } else {
+    d = new Date();
+  }
+
   if (Number.isNaN(d.getTime())) return '';
 
   const pad = (n) => String(n).padStart(2, '0');

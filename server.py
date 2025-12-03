@@ -1113,7 +1113,44 @@ async def get_session_messages(session_id: str, session_name: Optional[str] = No
             detailed_answer = turn.get("detailedAssistAnswer", {})
             replies = detailed_answer.get("replies", [])
 
-            skipped_info = None if replies else build_skipped_message(detailed_answer)
+            # 如果 detailedAssistAnswer 没有 replies，尝试从 diagnosticInfo.plannerSteps 提取回复
+            # 这种情况可能发生在 Google API 只返回最近一条的详细信息时
+            if not replies and planner_steps:
+                # 从 plannerSteps 中提取非思考内容作为回复
+                fallback_texts = []
+                fallback_thoughts = []
+                for step in planner_steps:
+                    plan_step = step.get("planStep", {})
+                    if not plan_step:
+                        continue
+                    parts = plan_step.get("parts") or []
+                    for p in parts:
+                        if isinstance(p, dict) and p.get("text"):
+                            text = p["text"].strip()
+                            if text:
+                                # 检查是否是思考内容（通常以 ** 开头或很短）
+                                if text.startswith("**") and text.endswith("**\n"):
+                                    fallback_thoughts.append(text)
+                                else:
+                                    fallback_texts.append(text)
+
+                if fallback_texts:
+                    # 合并所有文本片段
+                    combined_text = "".join(fallback_texts)
+                    msg_data = {
+                        "role": "assistant",
+                        "content": combined_text,
+                        "timestamp": assistant_ts,
+                    }
+                    if fallback_thoughts:
+                        msg_data["thoughts"] = fallback_thoughts
+                    if thinking_duration_ms is not None:
+                        msg_data["thinking_duration_ms"] = thinking_duration_ms
+                    messages.append(msg_data)
+                    # 跳过后续的 replies 处理
+                    replies = None
+
+            skipped_info = None if replies else build_skipped_message(detailed_answer) if replies is not None else None
 
             if replies:
                 # 分别收集文本、思考和图片
