@@ -129,28 +129,48 @@ class RemoteBrowserSession:
 
             self._playwright = await async_playwright().start()
 
-            # 启动 Chromium（headless 模式）
-            # 注意：使用 launch_persistent_context 可以持久化用户数据，但这里我们使用临时目录
-            # 每次登录都是干净环境
-            self._browser = await self._playwright.chromium.launch(
-                headless=True,
-                args=[
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--disable-gpu',
-                ]
-            )
+            # 优先尝试以“真浏览器”形态启动 Chrome，减少被判定为不安全的概率
+            launch_args = [
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-infobars",
+                "--window-size=1280,800",
+            ]
+
+            launch_kwargs = {
+                "headless": False,
+                "args": launch_args,
+            }
+
+            browser = None
+            # 优先使用系统 Chrome（若 playwright 安装了 chrome）
+            try:
+                browser = await self._playwright.chromium.launch(channel="chrome", **launch_kwargs)
+                logger.info("使用 Chrome channel 启动浏览器")
+            except Exception as chrome_err:  # noqa: BLE001
+                logger.warning(f"Chrome channel 启动失败，回退 chromium: {chrome_err}")
+                browser = await self._playwright.chromium.launch(**launch_kwargs)
+
+            self._browser = browser
 
             # 创建上下文（带代理）
             context_options = {
                 "viewport": {"width": self.viewport_width, "height": self.viewport_height},
-                "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
             }
             if playwright_proxy:
                 context_options["proxy"] = playwright_proxy
 
             self._context = await self._browser.new_context(**context_options)
+            # 隐藏自动化标识，降低账号登录时的安全提示概率
+            try:
+                await self._context.add_init_script(
+                    "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+                )
+            except Exception as e:
+                logger.debug(f"设置 webdriver 伪装失败: {e}")
 
             # 创建页面
             self._page = await self._context.new_page()

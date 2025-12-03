@@ -21,7 +21,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-RUN python -m playwright install chromium
+# 安装 chromium + chrome（chrome 渠道可降低登录风控提示）
+RUN python -m playwright install chromium chrome
 
 COPY . .
 

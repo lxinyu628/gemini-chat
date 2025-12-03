@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from urllib.parse import quote_plus
 from typing import Any, Dict, List, Optional, Union
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect, Header, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect, Header, Form, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -227,7 +227,8 @@ async def shutdown_event() -> None:
 
 class Message(BaseModel):
     role: str
-    content: str
+    # 兼容 OpenAI 标准格式的字符串与 content parts 两种形式
+    content: Union[str, List[Dict[str, Any]]]
 
 
 class ChatRequest(BaseModel):
@@ -1323,23 +1324,21 @@ async def update_session_title(session_id: str, title: str) -> dict:
     return {"success": True}
 
 
-@app.post("/v1/chat/completions", response_model=None)
-async def chat_completions(
+async def _chat_completions_handler(
     request: ChatRequest,
-    x_session_id: Optional[str] = Header(None, alias="X-Session-Id"),
-    conversation_id: Optional[str] = Header(None, alias="Conversation-Id"),
+    x_session_id: Optional[str],
+    conversation_id: Optional[str],
+    response_obj: Response,
+    strict_openai: bool = False,
 ) -> Union[dict, StreamingResponse]:
-    """OpenAI 兼容的聊天接口
+    """共享的 ChatCompletion 处理逻辑。
 
-    支持通过 Header 传递会话 ID 以保持上下文（适配 ChatWebUI/Lobe Chat 等通用前端）：
-    - X-Session-Id: 优先级最高
-    - Conversation-Id: 次优先级
-    - body.session_id: 第三优先级
-    - 如果都没有，则创建新会话
-
-    通用前端可在自定义 Header 中设置 X-Session-Id 或 Conversation-Id 保持上下文，
-    否则每次请求都会创建新会话。
+    strict_openai=True 时：
+    - 只返回/流出 OpenAI 官方字段，不混入自定义 images/thoughts/final_metadata
+    - 使用响应头传递 session 信息，避免破坏协议
     """
+    response_obj = response_obj or Response()
+
     try:
         config = load_config()
         missing = [k for k in ("secure_c_ses", "csesidx", "group_id") if not config.get(k)]
@@ -1372,6 +1371,12 @@ async def chat_completions(
         raise HTTPException(status_code=500, detail=f"创建会话失败: {error_msg}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"创建会话失败: {str(e)}")
+
+    # 将真实 session id 通过 header 返回（符合协议且方便第三方前端复用）
+    if canonical_session_id:
+        response_obj.headers["X-Session-Id"] = canonical_session_id
+    if session_data.get("session_name"):
+        response_obj.headers["X-Session-Name"] = session_data["session_name"]
 
     # 获取待发送的文件 ID
     pending_file_ids = session_data.get("pending_file_ids", [])
@@ -1410,10 +1415,21 @@ async def chat_completions(
     if user_message:
         # 仅记录标题，不缓存整段消息，避免本地存储占用及信息不一致
         if not session_data.get("title"):
-            title = user_message.content[:30]
-            if len(user_message.content) > 30:
+            if isinstance(user_message.content, str):
+                preview = user_message.content
+            elif isinstance(user_message.content, list):
+                # 文本块拼接作为标题预览
+                preview_parts = []
+                for part in user_message.content:
+                    if isinstance(part, dict) and part.get("type") == "text" and part.get("text"):
+                        preview_parts.append(str(part["text"]))
+                preview = "\n".join(preview_parts) if preview_parts else ""
+            else:
+                preview = ""
+            title = preview[:30]
+            if len(preview) > 30:
                 title += "..."
-            session_data["title"] = title
+            session_data["title"] = title or "新对话"
 
     messages = [{"role": m.role, "content": m.content} for m in request.messages]
     full_session_name = session_data.get("session_name")
@@ -1525,6 +1541,8 @@ async def chat_completions(
             logger.warning(f"获取实时思考耗时失败: {e}")
             return None
 
+    include_thoughts_flag = request.include_thoughts and (not strict_openai)
+
     if request.stream:
         async def generate():
             try:
@@ -1537,13 +1555,11 @@ async def chat_completions(
                     messages=messages,
                     stream=True,
                     include_image_data=request.include_image_data,
-                    include_thoughts=request.include_thoughts,
+                    include_thoughts=include_thoughts_flag,
                     embed_images_in_content=request.embed_images_in_content,
                     file_ids=file_ids_to_send,
                 )
                 full_content = ""
-                stream_start = time.time()
-                images_data = None
                 thoughts_data = []
                 for chunk in response:
                     delta = chunk.get("choices", [{}])[0].get("delta", {})
@@ -1553,8 +1569,8 @@ async def chat_completions(
                         full_content += delta_content
                     if delta_thought:
                         thoughts_data.append(delta_thought)
-                    # 检查是否有图片数据
-                    if "images" in chunk:
+                    # 检查是否有图片数据（仅非 strict 模式下返回自定义 images 字段）
+                    if not strict_openai and "images" in chunk:
                         raw_images = chunk.get("images") or []
                         enriched_images = []
                         for img in raw_images:
@@ -1579,24 +1595,31 @@ async def chat_completions(
                                 img_copy.setdefault("url", download_url)
                             enriched_images.append(img_copy)
                         chunk["images"] = enriched_images
-                        images_data = enriched_images
                     yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
-                meta = fetch_latest_turn_meta()
-                if meta:
-                    yield f"data: {json.dumps({'final_metadata': meta}, ensure_ascii=False)}\n\n"
+                # 仅在非 strict 模式下附加额外元数据
+                if not strict_openai:
+                    meta = fetch_latest_turn_meta()
+                    if meta:
+                        yield f"data: {json.dumps({'final_metadata': meta}, ensure_ascii=False)}\n\n"
                 yield "data: [DONE]\n\n"
 
             except Exception as e:
                 error_data = {"error": {"message": str(e)}}
                 yield f"data: {json.dumps(error_data)}\n\n"
 
+        stream_headers = {
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+        if canonical_session_id:
+            stream_headers["X-Session-Id"] = canonical_session_id
+        if session_data.get("session_name"):
+            stream_headers["X-Session-Name"] = session_data["session_name"]
+
         return StreamingResponse(
             generate(),
             media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-            }
+            headers=stream_headers,
         )
     else:
         try:
@@ -1609,7 +1632,7 @@ async def chat_completions(
                 messages=messages,
                 stream=False,
                 include_image_data=request.include_image_data,
-                include_thoughts=request.include_thoughts,
+                include_thoughts=include_thoughts_flag,
                 embed_images_in_content=request.embed_images_in_content,
                 file_ids=file_ids_to_send,
             )
@@ -1623,6 +1646,20 @@ async def chat_completions(
             if "thoughts" in response:
                 logger.debug(f"Thoughts count: {len(response.get('thoughts', []))}")
 
+            if strict_openai:
+                # 返回标准字段，避免混入自定义 keys
+                clean_resp = {
+                    "id": response.get("id"),
+                    "object": response.get("object"),
+                    "created": response.get("created"),
+                    "model": response.get("model"),
+                    "choices": response.get("choices", []),
+                    "usage": response.get("usage"),
+                }
+                if response.get("system_fingerprint"):
+                    clean_resp["system_fingerprint"] = response.get("system_fingerprint")
+                return clean_resp
+
             # 返回 canonical session_id 和 session_name，供前端更新状态
             response["session_id"] = canonical_session_id
             response["session_name"] = session_data.get("session_name")
@@ -1635,6 +1672,45 @@ async def chat_completions(
             logger.error(f"Chat completion failed: {e}")
             traceback.print_exc()
             raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/v1/chat/completions", response_model=None)
+async def chat_completions(
+    request: ChatRequest,
+    x_session_id: Optional[str] = Header(None, alias="X-Session-Id"),
+    conversation_id: Optional[str] = Header(None, alias="Conversation-Id"),
+    response: Response = None,
+) -> Union[dict, StreamingResponse]:
+    """OpenAI 兼容的聊天接口（保持当前前端行为）。"""
+    return await _chat_completions_handler(
+        request=request,
+        x_session_id=x_session_id,
+        conversation_id=conversation_id,
+        response_obj=response,
+        strict_openai=False,
+    )
+
+
+@app.post("/v1/openai/chat/completions", response_model=None)
+async def chat_completions_strict(
+    request: ChatRequest,
+    x_session_id: Optional[str] = Header(None, alias="X-Session-Id"),
+    conversation_id: Optional[str] = Header(None, alias="Conversation-Id"),
+    response: Response = None,
+) -> Union[dict, StreamingResponse]:
+    """严格遵循 OpenAI Chat Completions 协议的接口。
+
+    - 不返回自定义字段（images/thoughts/final_metadata/session_id）
+    - 会话信息通过响应头 X-Session-Id / X-Session-Name 传递
+    - 适配 ChatWebUI / Lobe Chat 等严格校验第三方前端
+    """
+    return await _chat_completions_handler(
+        request=request,
+        x_session_id=x_session_id,
+        conversation_id=conversation_id,
+        response_obj=response,
+        strict_openai=True,
+    )
 
 
 @app.get("/v1/models")
