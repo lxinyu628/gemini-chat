@@ -1773,7 +1773,17 @@ document.getElementById('stopBrowserBtn').addEventListener('click', stopBrowser)
 document.getElementById('saveManualBtn').addEventListener('click', saveManualConfig);
 
 async function startBrowser(options = {}) {
-  const { useProfile = false, startUrl = null, auto = false } = options || {};
+  const { useProfile = false, auto = false } = options || {};
+  let { startUrl = null } = options || {};
+
+  // 默认使用 account-chooser，并带上 continueUrl，避免直接落到 business.gemini.google 导致看不到登录页
+  if (!startUrl) {
+    const continueTarget = state.accountChooserUrl
+      ? null
+      : 'https://business.gemini.google/home/';
+    const fallbackUrl = `https://auth.business.gemini.google/account-chooser?continueUrl=${encodeURIComponent(continueTarget || 'https://business.gemini.google/')}`;
+    startUrl = state.accountChooserUrl || fallbackUrl;
+  }
 
   if (browserState.connected) return;
 
@@ -1850,6 +1860,7 @@ function handleBrowserMessage(data) {
   const startBtn = document.getElementById('startBrowserBtn');
   const stopBtn = document.getElementById('stopBrowserBtn');
   const inputBox = document.getElementById('browserInput');
+  const urlDiv = document.getElementById('browserUrl');
 
   switch (data.type) {
     case 'status':
@@ -1860,16 +1871,32 @@ function handleBrowserMessage(data) {
         startBtn.style.display = 'none';
         stopBtn.style.display = 'inline-block';
         inputBox.style.display = 'block';
+        if (urlDiv) {
+          urlDiv.style.display = 'none';
+          urlDiv.textContent = '';
+        }
       } else if (data.status === 'login_success') {
         statusDiv.style.display = 'block';
         statusDiv.innerHTML = `<p style="color: green;">${data.message}</p><button class="btn btn-primary" onclick="saveAndClose()">保存并关闭</button>`;
+        if (urlDiv) {
+          urlDiv.style.display = 'none';
+          urlDiv.textContent = '';
+        }
       } else {
         statusDiv.innerHTML = `<p>${data.message}</p>`;
+        if (urlDiv) {
+          urlDiv.style.display = 'none';
+          urlDiv.textContent = '';
+        }
       }
       break;
 
     case 'screenshot':
       screenImg.src = 'data:image/jpeg;base64,' + data.data;
+      if (data.url && urlDiv) {
+        urlDiv.style.display = 'block';
+        urlDiv.textContent = `当前页面: ${data.url}`;
+      }
       break;
 
     case 'login_success':

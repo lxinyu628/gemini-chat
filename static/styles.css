@@ -1281,6 +1281,13 @@ body {
   overflow: hidden;
 }
 
+.browser-url {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+  word-break: break-all;
+}
+
 .browser-screen {
   width: 100%;
   height: auto;
