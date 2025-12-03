@@ -7,9 +7,9 @@ from datetime import datetime, timezone
 from urllib.parse import quote_plus
 from typing import Any, Dict, List, Optional, Union
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect, Header, Form, Response
+from fastapi import FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect, Header, Form, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -43,6 +43,43 @@ from version import VERSION, get_version_info, GITHUB_REPO
 logger = get_logger("server")
 
 app = FastAPI(title="Gemini Chat API", version=VERSION)
+
+
+# OpenAI 兼容的错误响应处理器
+@app.exception_handler(HTTPException)
+async def openai_error_handler(request: Request, exc: HTTPException):
+    """将 HTTPException 转换为 OpenAI 标准错误格式"""
+    # 只对 /v1/ 路径下的 API 返回 OpenAI 格式错误
+    if request.url.path.startswith("/v1/"):
+        error_type = "api_error"
+        if exc.status_code == 400:
+            error_type = "invalid_request_error"
+        elif exc.status_code == 401:
+            error_type = "authentication_error"
+        elif exc.status_code == 403:
+            error_type = "permission_error"
+        elif exc.status_code == 404:
+            error_type = "not_found_error"
+        elif exc.status_code == 429:
+            error_type = "rate_limit_error"
+
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "error": {
+                    "message": exc.detail,
+                    "type": error_type,
+                    "param": None,
+                    "code": str(exc.status_code)
+                }
+            }
+        )
+    # 非 /v1/ 路径保持 FastAPI 默认格式
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail}
+    )
+
 
 # CORS 配置
 app.add_middleware(
@@ -235,6 +272,18 @@ class ChatRequest(BaseModel):
     model: str = "business-gemini"
     messages: List[Message]
     stream: bool = False
+    # OpenAI 标准参数（接收以保证兼容性，Gemini API 不一定支持）
+    temperature: Optional[float] = None
+    top_p: Optional[float] = None
+    max_tokens: Optional[int] = None
+    presence_penalty: Optional[float] = None
+    frequency_penalty: Optional[float] = None
+    stop: Optional[Union[str, List[str]]] = None
+    n: Optional[int] = None
+    user: Optional[str] = None
+    logprobs: Optional[bool] = None
+    top_logprobs: Optional[int] = None
+    # 自定义扩展参数
     session_id: Optional[str] = None
     session_name: Optional[str] = None
     file_ids: Optional[List[str]] = None
@@ -1606,33 +1655,49 @@ async def _chat_completions_handler(
                         full_content += delta_content
                     if delta_thought:
                         thoughts_data.append(delta_thought)
-                    # 检查是否有图片数据（仅非 strict 模式下返回自定义 images 字段）
-                    if not strict_openai and "images" in chunk:
-                        raw_images = chunk.get("images") or []
-                        enriched_images = []
-                        for img in raw_images:
-                            img_copy = dict(img)
-                            file_obj = img.get("file") or {}
-                            file_id = (
-                                img.get("file_id")
-                                or img.get("fileId")
-                                or file_obj.get("file_id")
-                                or file_obj.get("fileId")
-                            )
-                            if file_id:
-                                img_copy.setdefault("file_id", file_id)
-                            mime_type = img.get("mime_type") or img.get("mimeType") or file_obj.get("mimeType")
-                            if mime_type:
-                                img_copy.setdefault("mime_type", mime_type)
-                            if file_id and api_session_id:
-                                download_url = f"/api/sessions/{api_session_id}/images/{file_id}"
-                                if encoded_session_name:
-                                    download_url += f"?session_name={encoded_session_name}"
-                                img_copy.setdefault("download_uri", download_url)
-                                img_copy.setdefault("url", download_url)
-                            enriched_images.append(img_copy)
-                        chunk["images"] = enriched_images
-                    yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+
+                    if strict_openai:
+                        # strict 模式：移除非标准字段，只保留 OpenAI 标准字段
+                        clean_chunk = {
+                            "id": chunk.get("id"),
+                            "object": chunk.get("object"),
+                            "created": chunk.get("created"),
+                            "model": chunk.get("model"),
+                            "choices": chunk.get("choices", []),
+                        }
+                        # 移除 delta 中的非标准字段（如 thought）
+                        for choice in clean_chunk.get("choices", []):
+                            if "delta" in choice and "thought" in choice["delta"]:
+                                del choice["delta"]["thought"]
+                        yield f"data: {json.dumps(clean_chunk, ensure_ascii=False)}\n\n"
+                    else:
+                        # 非 strict 模式：保留自定义字段，增强图片信息
+                        if "images" in chunk:
+                            raw_images = chunk.get("images") or []
+                            enriched_images = []
+                            for img in raw_images:
+                                img_copy = dict(img)
+                                file_obj = img.get("file") or {}
+                                file_id = (
+                                    img.get("file_id")
+                                    or img.get("fileId")
+                                    or file_obj.get("file_id")
+                                    or file_obj.get("fileId")
+                                )
+                                if file_id:
+                                    img_copy.setdefault("file_id", file_id)
+                                mime_type = img.get("mime_type") or img.get("mimeType") or file_obj.get("mimeType")
+                                if mime_type:
+                                    img_copy.setdefault("mime_type", mime_type)
+                                if file_id and api_session_id:
+                                    download_url = f"/api/sessions/{api_session_id}/images/{file_id}"
+                                    if encoded_session_name:
+                                        download_url += f"?session_name={encoded_session_name}"
+                                    img_copy.setdefault("download_uri", download_url)
+                                    img_copy.setdefault("url", download_url)
+                                enriched_images.append(img_copy)
+                            chunk["images"] = enriched_images
+                        yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
                 # 仅在非 strict 模式下附加额外元数据
                 if not strict_openai:
                     meta = fetch_latest_turn_meta()
@@ -1752,15 +1817,17 @@ async def chat_completions_strict(
 
 @app.get("/v1/models")
 async def list_models() -> dict:
-    """列出可用模型"""
+    """列出可用模型（OpenAI 兼容格式）"""
+    # 使用固定时间戳以保持一致性
+    created_ts = 1700000000
     return {
         "object": "list",
         "data": [
-            {"id": "auto", "object": "model", "owned_by": "google", "name": "自动", "description": "Gemini Enterprise 会选择最合适的选项"},
-            {"id": "gemini-2.5-flash", "object": "model", "owned_by": "google", "name": "Gemini 2.5 Flash", "description": "适用于执行日常任务"},
-            {"id": "gemini-2.5-pro", "object": "model", "owned_by": "google", "name": "Gemini 2.5 Pro", "description": "最适用于执行复杂任务"},
-            {"id": "gemini-3-pro-preview", "object": "model", "owned_by": "google", "name": "Gemini 3 Pro Preview", "description": "先进的推理模型"},
-            {"id": "business-gemini", "object": "model", "owned_by": "google", "name": "Business Gemini", "description": "默认自动选择"},
+            {"id": "auto", "object": "model", "created": created_ts, "owned_by": "google"},
+            {"id": "gemini-2.5-flash", "object": "model", "created": created_ts, "owned_by": "google"},
+            {"id": "gemini-2.5-pro", "object": "model", "created": created_ts, "owned_by": "google"},
+            {"id": "gemini-3-pro-preview", "object": "model", "created": created_ts, "owned_by": "google"},
+            {"id": "business-gemini", "object": "model", "created": created_ts, "owned_by": "google"},
         ]
     }
 

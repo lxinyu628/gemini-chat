@@ -293,9 +293,9 @@ class OpenAICompatClient:
                         }
                     ],
                     "usage": {
-                        "prompt_tokens": None,
-                        "completion_tokens": None,
-                        "total_tokens": None,
+                        "prompt_tokens": 0,
+                        "completion_tokens": 0,
+                        "total_tokens": 0,
                     },
                 }
 
