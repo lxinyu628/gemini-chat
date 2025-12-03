@@ -34,5 +34,10 @@
     "enabled": false,
     "interval_minutes": 60,
     "headless": true
+  },
+  "remote_browser": {
+    "_comment": "远程浏览器配置 - 用于登录和 Cookie 刷新",
+    "_comment_headless": "是否无头模式，Linux服务器设为true，Windows本地可设为false以显示浏览器窗口",
+    "headless": true
   }
 }

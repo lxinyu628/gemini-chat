@@ -139,10 +139,16 @@ class RemoteBrowserSession:
                 "--window-size=1280,800",
             ]
 
+            # 从配置读取 headless 设置，默认为 True（无头模式）
+            remote_browser_config = config.get("remote_browser", {})
+            headless = remote_browser_config.get("headless", True)
+
             launch_kwargs = {
-                "headless": False,
+                "headless": headless,
                 "args": launch_args,
             }
+
+            logger.info(f"浏览器启动模式: headless={headless}")
 
             browser = None
             # 优先使用系统 Chrome（若 playwright 安装了 chrome）
