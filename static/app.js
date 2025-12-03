@@ -1826,10 +1826,6 @@ function showTypingIndicator () {
   const contentDiv = document.createElement('div');
   contentDiv.className = 'message-content';
 
-  const tsDiv = document.createElement('div');
-  tsDiv.className = 'message-timestamp';
-  tsDiv.textContent = formatTimestamp();
-
   // 显示"正在思考"的动画效果
   const thinkingIndicator = document.createElement('div');
   thinkingIndicator.className = 'thinking-indicator';
@@ -1839,7 +1835,6 @@ function showTypingIndicator () {
   `;
 
   contentDiv.appendChild(thinkingIndicator);
-  contentDiv.appendChild(tsDiv);
   messageDiv.appendChild(avatar);
   messageDiv.appendChild(contentDiv);
 

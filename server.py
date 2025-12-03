@@ -1445,25 +1445,77 @@ async def chat_completions(
             if not turns:
                 return None
             last_turn = turns[-1]
+
+            # 获取 detailedAssistAnswer
+            detailed_answer = last_turn.get("detailedAssistAnswer", {})
             diagnostic_info = (
                 last_turn.get("diagnosticInfo")
-                or last_turn.get("detailedAssistAnswer", {}).get("diagnosticInfo")
+                or detailed_answer.get("diagnosticInfo")
                 or {}
             )
             planner_steps = diagnostic_info.get("plannerSteps") or []
-            plan_times: list[datetime] = []
+
+            # 构建 planStep 详情列表（文本和时间）
+            plan_steps_detail: list[dict] = []
             for step in planner_steps:
                 ct = _parse_dt(step.get("createTime"))
-                if ct and step.get("planStep"):
-                    plan_times.append(ct)
+                plan_step = step.get("planStep")
+                if ct and plan_step:
+                    parts = plan_step.get("parts") or []
+                    step_text = ""
+                    for p in parts:
+                        if isinstance(p, dict) and p.get("text"):
+                            step_text += p["text"]
+                    plan_steps_detail.append({"ts": ct, "text": step_text.strip()})
+
+            # 从 replies 中提取思考链文本
+            replies = detailed_answer.get("replies") or []
+            thought_texts: list[str] = []
+            for reply in replies:
+                grounded_content = reply.get("groundedContent", {})
+                content = grounded_content.get("content", {})
+                text = content.get("text", "")
+                is_thought = content.get("thought", False)
+                if text and is_thought:
+                    thought_texts.append(text.strip())
+
+            # 匹配思考文本与 planStep，提取精确的思考耗时
+            matched_plan_ts: list[datetime] = []
+            if thought_texts and plan_steps_detail:
+                for thought in thought_texts:
+                    for ps in plan_steps_detail:
+                        if not ps["ts"] or not ps["text"]:
+                            continue
+                        # 检查 planStep 文本是否包含在思考文本中，或思考文本包含在 planStep 中
+                        if ps["text"] in thought or thought in ps["text"]:
+                            if ps["ts"] not in matched_plan_ts:
+                                matched_plan_ts.append(ps["ts"])
 
             thinking_duration_ms = None
-            if len(plan_times) >= 2:
-                thinking_duration_ms = int((plan_times[-1] - plan_times[0]).total_seconds() * 1000)
+            if len(matched_plan_ts) >= 2:
+                matched_plan_ts = sorted(matched_plan_ts)
+                thinking_duration_ms = int((matched_plan_ts[-1] - matched_plan_ts[0]).total_seconds() * 1000)
+            elif len(matched_plan_ts) == 1 and plan_steps_detail:
+                # 仅匹配到一个步骤时，尝试使用它之后的下一个 planStep 作为结束时间
+                matched_ts = matched_plan_ts[0]
+                sorted_steps = sorted(plan_steps_detail, key=lambda x: x["ts"] or datetime.min)
+                for idx, ps in enumerate(sorted_steps):
+                    if ps["ts"] == matched_ts and idx + 1 < len(sorted_steps):
+                        next_ts = sorted_steps[idx + 1]["ts"]
+                        thinking_duration_ms = int((next_ts - matched_ts).total_seconds() * 1000)
+                        break
+
+            # 如果没有匹配到思考文本，回退到使用所有 planStep 时间
+            if thinking_duration_ms is None and len(plan_steps_detail) >= 2:
+                all_times = sorted([ps["ts"] for ps in plan_steps_detail if ps["ts"]])
+                if len(all_times) >= 2:
+                    thinking_duration_ms = int((all_times[-1] - all_times[0]).total_seconds() * 1000)
 
             assistant_ts = _parse_dt(last_turn.get("createdAt"))
-            if plan_times:
-                assistant_ts = plan_times[-1]
+            if plan_steps_detail:
+                # 使用最后一个 planStep 的时间作为助手回复时间
+                sorted_steps = sorted(plan_steps_detail, key=lambda x: x["ts"] or datetime.min)
+                assistant_ts = sorted_steps[-1]["ts"]
             assistant_iso = _to_iso_z(assistant_ts) if assistant_ts else None
             return {
                 "assistant_timestamp": assistant_iso,
