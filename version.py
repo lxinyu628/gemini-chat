@@ -3,7 +3,7 @@
 import subprocess
 
 # 默认版本号（当无法从 git 获取时使用）
-DEFAULT_VERSION = "1.0.8"
+DEFAULT_VERSION = "1.0.0"
 
 
 def _get_version_from_git() -> str:
