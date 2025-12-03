@@ -1079,8 +1079,6 @@ async function sendMessage () {
   let assistantMsgDiv = null;
   let contentDiv = null;
   let thinkingBlock = null;
-  let thinkingTimer = null;
-  let thinkingStart = null;
 
   try {
     const response = await fetch('/v1/chat/completions', {
@@ -1112,13 +1110,9 @@ async function sendMessage () {
     const textEl = assistantMsgDiv.querySelector('.message-text');
     contentDiv = assistantMsgDiv.querySelector('.message-content');
 
-    thinkingStart = Date.now();
     if (contentDiv) {
-      thinkingBlock = createThinkingBlock('正在思考...', true, 0);
+      thinkingBlock = createThinkingBlock('正在思考...', true, null);
       contentDiv.insertBefore(thinkingBlock, contentDiv.firstChild);
-      thinkingTimer = setInterval(() => {
-        updateThinkingBlock(thinkingBlock, { isActive: true, durationMs: Date.now() - thinkingStart });
-      }, 200);
       if (typeof lucide !== 'undefined') {
         lucide.createIcons({ nodes: [thinkingBlock] });
       }
@@ -1195,11 +1189,6 @@ async function sendMessage () {
       if (done) break;
     }
 
-    if (thinkingTimer) {
-      clearInterval(thinkingTimer);
-    }
-    const thinkingDurationMs = thinkingStart ? (Date.now() - thinkingStart) : 0;
-
     // 流结束后渲染最终 Markdown
     if (textEl) {
       textEl.innerHTML = renderMarkdown(fullText);
@@ -1213,14 +1202,14 @@ async function sendMessage () {
     const thinkingContent = thinkingParts.length > 0 ? thinkingParts.join('\n') : null;
     if (contentDiv && thinkingBlock) {
       if (thinkingContent) {
-        const newBlock = createThinkingBlock(thinkingContent, false, thinkingDurationMs);
+        const newBlock = createThinkingBlock(thinkingContent, false, null);
         thinkingBlock.replaceWith(newBlock);
         thinkingBlock = newBlock;
       } else {
         updateThinkingBlock(thinkingBlock, {
           thinkingText: '模型未返回思考链',
           isActive: false,
-          durationMs: thinkingDurationMs
+          durationMs: null
         });
       }
     }
@@ -1236,18 +1225,16 @@ async function sendMessage () {
     // 更新会话列表
     await loadConversations();
   } catch (error) {
-    if (thinkingTimer) {
-      clearInterval(thinkingTimer);
-    }
+    removeTypingIndicator(loadingId);
+    console.error('发送消息失败:', error);
+
     if (contentDiv && thinkingBlock) {
       updateThinkingBlock(thinkingBlock, {
         thinkingText: '请求失败，未生成思考链',
         isActive: false,
-        durationMs: thinkingStart ? (Date.now() - thinkingStart) : 0
+        durationMs: null
       });
     }
-    removeTypingIndicator(loadingId);
-    console.error('发送消息失败:', error);
 
     if (error.message.includes('401') || error.message.includes('过期')) {
       showExpiredModal();
