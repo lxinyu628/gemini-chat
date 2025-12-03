@@ -48,7 +48,7 @@ source venv/bin/activate
 pip install -r requirements.txt
 
 # 安装 Playwright 浏览器（用于登录）
-playwright install chromium
+playwright install chromium chrome
 ```
 
 ### 2. 配置
@@ -205,6 +205,18 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 
 响应中会返回 `session_id` 和 `session_name`，可用于后续请求保持上下文。
 
+#### 严格 OpenAI 兼容端点（推荐用于 ChatWebUI/Lobe Chat 等第三方）
+
+为避免第三方前端因自定义字段或流式格式校验失败，新增严格模式端点：
+
+```bash
+POST /v1/openai/chat/completions
+```
+
+- 请求体与官方 OpenAI Chat Completions 完全一致，支持 `content` 为字符串或 `[{type:"text"|"image_url", ...}]`。
+- 响应/流式输出仅包含官方字段；`session` 信息通过响应头返回：`X-Session-Id`、`X-Session-Name`。
+- 内置 Web 前端继续使用 `/v1/chat/completions` 保持现有功能（图片下载链接、思考链等），不会被破坏。
+
 ### 配置管理 API
 
 ```bash
@@ -326,7 +338,7 @@ tail -f log/error.log
 
 ```bash
 pip install -r requirements.txt
-playwright install chromium
+playwright install chromium chrome
 ```
 
 查看错误日志：
@@ -338,7 +350,7 @@ cat log/error.log
 ### 2. 登录失败
 
 - 检查代理是否正常运行
-- 确保浏览器驱动已安装：`playwright install chromium`
+- 确保浏览器驱动已安装：`playwright install chromium chrome`
 - 查看详细错误信息
 
 ### 3. 代理问题
@@ -387,7 +399,7 @@ dnf install -y nss nspr atk at-spi2-atk cups-libs libXcomposite \
     libXdamage libXfixes libXrandr mesa-libgbm pango cairo alsa-lib
 
 # 然后安装浏览器（不带 --with-deps）
-playwright install chromium
+playwright install chromium chrome
 ```
 
 验证安装是否成功：
@@ -427,13 +439,21 @@ HTTP 401
 python app.py login
 ```
 
-### 7. 远程浏览器连接后立即断开
+### 7. Google 提示“此浏览器或应用可能不安全”
+
+- 已将远程浏览器改为 headful Chrome 渠道启动，并移除了自动化特征；如仍被拦截可检查：
+  - 确认已安装 Chrome 浏览器：`playwright install chrome`（Docker 镜像已预装）
+- 如前端提供“使用上次浏览器/复用配置”选项，建议开启以复用已保存的 `cookie_profile_dir`，降低二次验证概率
+  - Docker 环境建议增加 `--shm-size=1g`/`--ipc=host`，避免浏览器异常退出被 Google 判定风险
+  - 如果使用自建代理，确认出口 IP 未被 Google 风控
+
+### 8. 远程浏览器连接后立即断开
 
 如果 WebSocket 连接后立即断开（日志显示 `connection open` 后马上 `connection closed`），通常是 Playwright 浏览器启动失败。
 
 检查步骤：
 
-1. 确认 Chromium 已安装：`playwright install chromium`
+1. 确认 Chromium 已安装：`playwright install chromium chrome`
 2. 检查系统依赖是否完整（见上方 Ubuntu 24.04 部分）
 3. 手动测试浏览器启动：
    ```bash

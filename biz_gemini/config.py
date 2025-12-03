@@ -47,6 +47,10 @@ DEFAULT_CONFIG = {
         "interval_minutes": 60,  # 保活间隔（分钟）
         "headless": True,  # 是否无头模式
     },
+    # 远程浏览器配置（用于登录和 Cookie 刷新）
+    "remote_browser": {
+        "headless": True,  # 是否无头模式，Linux服务器设为true，Windows本地可设为false
+    },
     # 账号状态（运行时状态，不持久化到配置文件）
     "account_state": {
         "jwt": "",  # 缓存的 JWT

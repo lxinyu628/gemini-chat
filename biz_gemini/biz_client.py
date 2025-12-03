@@ -2,6 +2,7 @@ import base64
 import json
 import os
 import uuid
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, List, Optional
@@ -252,6 +253,10 @@ class BizGeminiClient:
         proxy = get_proxy(config)
         self._proxies = {"http": proxy, "https": proxy} if proxy else None
         self._session_name: Optional[str] = None
+        # 简单的文件元数据缓存，减少重复请求带来的延迟
+        # key: (session_name, filter_str) -> {"ts": float, "data": dict}
+        self._file_metadata_cache: dict = {}
+        self._file_metadata_ttl = 60  # 秒
 
     @property
     def session_name(self) -> str:
@@ -287,8 +292,19 @@ class BizGeminiClient:
                 continue
 
             if resp.status_code != 200:
+                # 解析错误详情
+                error_detail = resp.text[:500]
+                error_msg = error_detail
+                error_status = ""
+                try:
+                    error_json = resp.json()
+                    error_msg = error_json.get("error", {}).get("message", error_detail)
+                    error_status = error_json.get("error", {}).get("status", "")
+                except Exception:
+                    pass
+
                 raise RuntimeError(
-                    f"创建会话失败: {resp.status_code} {resp.text[:200]}"
+                    f"创建会话失败: {resp.status_code} {error_status} - {error_msg}"
                 )
 
             data = resp.json()
@@ -342,7 +358,7 @@ class BizGeminiClient:
         page_size: int = 110,
         page_token: str = "",
         order_by: str = "update_time desc",
-        filter_str: str = "",
+        filter_str: str = 'display_name != "" AND (NOT labels:hidden-from-ui-history)',
     ) -> dict:
         """获取会话列表（对接 Google 官方接口）
 
@@ -384,8 +400,19 @@ class BizGeminiClient:
                 continue
 
             if resp.status_code != 200:
+                # 解析错误详情
+                error_detail = resp.text[:500]
+                error_msg = error_detail
+                error_status = ""
+                try:
+                    error_json = resp.json()
+                    error_msg = error_json.get("error", {}).get("message", error_detail)
+                    error_status = error_json.get("error", {}).get("status", "")
+                except Exception:
+                    pass
+
                 raise RuntimeError(
-                    f"获取会话列表失败: {resp.status_code} {resp.text[:200]}"
+                    f"获取会话列表失败: {resp.status_code} {error_status} - {error_msg}"
                 )
 
             data = resp.json()
@@ -639,37 +666,64 @@ class BizGeminiClient:
         """获取 session 中的文件元数据，包括下载链接
 
         Args:
-            session_name: 会话名称
+            session_name: 会话名称（支持完整路径或简短路径）
             file_ids: 可选的文件 ID 列表（目前未使用）
             filter_str: 过滤条件，默认获取所有文件。
                        可选值: "file_origin_type = AI_GENERATED" 只获取 AI 生成的文件
                               "file_origin_type = USER_UPLOADED" 只获取用户上传的文件
         """
-        jwt = self.jwt_manager.get_jwt()
-        body = {
-            "configId": self.group_id,
-            "additionalParams": {"token": "-"},
-            "listSessionFileMetadataRequest": {
-                "name": session_name,
-            }
-        }
+        cache_key = (session_name, filter_str or "")
+        cache_hit = self._file_metadata_cache.get(cache_key)
+        if cache_hit and time.time() - cache_hit["ts"] < self._file_metadata_ttl:
+            return cache_hit["data"]
 
-        # 只有非空时才添加 filter
-        if filter_str:
-            body["listSessionFileMetadataRequest"]["filter"] = filter_str
+        # 构造可能的 session name 取值，兼容多种格式
+        session_candidates: List[str] = []
+        normalized_session_name = session_name
+        if session_name:
+            session_candidates.append(session_name)
+            if "collections/" in session_name:
+                idx = session_name.find("collections/")
+                if idx >= 0:
+                    normalized_session_name = session_name[idx:]
+                if normalized_session_name not in session_candidates:
+                    session_candidates.append(normalized_session_name)
+            else:
+                normalized_session_name = session_name
 
-        resp = requests.post(
-            LIST_FILE_METADATA_URL,
-            headers=build_headers(jwt),
-            json=body,
-            proxies=self._proxies,
-            verify=False,
-            timeout=30,
-        )
+            # 带 project_id 的完整路径（widgetListSessionFileMetadata 返回的格式）
+            project_id = self.config.get("project_id")
+            if project_id and normalized_session_name.startswith("collections/"):
+                prefixed = f"projects/{project_id}/locations/global/{normalized_session_name}"
+                if prefixed not in session_candidates:
+                    session_candidates.append(prefixed)
 
-        if resp.status_code == 401:
-            self.jwt_manager.refresh()
+            # 最后一段纯 session_id（以防接口只接受 ID）
+            session_id_only = session_name.split("/")[-1]
+            if session_id_only and session_id_only not in session_candidates:
+                session_candidates.append(session_id_only)
+
+        result: dict = {}
+        last_status: Optional[int] = None
+        tried: set = set()
+
+        def _fetch_with_name(candidate: str) -> None:
+            nonlocal last_status
+            if not candidate or candidate in tried:
+                return
+            tried.add(candidate)
+
             jwt = self.jwt_manager.get_jwt()
+            body = {
+                "configId": self.group_id,
+                "additionalParams": {"token": "-"},
+                "listSessionFileMetadataRequest": {
+                    "name": candidate,
+                }
+            }
+            if filter_str:
+                body["listSessionFileMetadataRequest"]["filter"] = filter_str
+
             resp = requests.post(
                 LIST_FILE_METADATA_URL,
                 headers=build_headers(jwt),
@@ -679,21 +733,72 @@ class BizGeminiClient:
                 timeout=30,
             )
 
-        if resp.status_code != 200:
-            logger.debug(f"_get_session_file_metadata error: {resp.status_code} {resp.text[:200]}")
-            return {}
+            # JWT 失效时刷新重试当前 candidate
+            if resp.status_code == 401:
+                self.jwt_manager.refresh()
+                jwt = self.jwt_manager.get_jwt()
+                resp = requests.post(
+                    LIST_FILE_METADATA_URL,
+                    headers=build_headers(jwt),
+                    json=body,
+                    proxies=self._proxies,
+                    verify=False,
+                    timeout=30,
+                )
 
-        data = resp.json()
-        logger.debug(f"_get_session_file_metadata response: {json.dumps(data, ensure_ascii=False)[:500]}")
+            last_status = resp.status_code
+            if resp.status_code != 200:
+                logger.debug(f"_get_session_file_metadata error (name={candidate}): {resp.status_code} {resp.text[:200]}")
+                return
 
-        result = {}
-        file_metadata_list = data.get("listSessionFileMetadataResponse", {}).get("fileMetadata", [])
-        for fm in file_metadata_list:
-            fid = fm.get("fileId")
-            if fid:
-                result[fid] = fm
+            data = resp.json()
+            logger.debug(f"_get_session_file_metadata response (name={candidate}): {json.dumps(data, ensure_ascii=False)[:500]}")
 
-        return result
+            file_metadata_list = data.get("listSessionFileMetadataResponse", {}).get("fileMetadata", [])
+            for fm in file_metadata_list:
+                fid = fm.get("fileId")
+                if fid:
+                    result[fid] = fm
+
+        # 先尝试预构建的 candidates
+        for candidate in session_candidates:
+            _fetch_with_name(candidate)
+            if result:
+                return result
+
+        # 如果还没有拿到，尝试通过 list_sessions 找到带 project_id 的完整路径
+        if not result:
+            try:
+                session_id_only = session_name.split("/")[-1] if session_name else ""
+                sessions_data = self.list_sessions(page_size=200, filter_str="")
+                sessions_list = sessions_data.get("listSessionsResponse", {}).get("sessions", [])
+                extra_candidates: List[str] = []
+                for sess in sessions_list:
+                    name = sess.get("name") or ""
+                    if not name:
+                        continue
+                    if session_id_only and name.endswith(session_id_only):
+                        extra_candidates.append(name)
+                for candidate in extra_candidates:
+                    _fetch_with_name(candidate)
+                    if result:
+                        return result
+            except Exception as e:
+                logger.debug(f"_get_session_file_metadata list_sessions fallback error: {e}")
+
+        if result:
+            # 写入缓存（同时缓存原始 session_name，以避免重复请求）
+            self._file_metadata_cache[cache_key] = {"ts": time.time(), "data": result}
+            # 也缓存 metadata 中返回的完整 session 路径，方便下次命中
+            for fm in result.values():
+                if fm.get("session"):
+                    alt_key = (fm["session"], filter_str or "")
+                    self._file_metadata_cache[alt_key] = {"ts": time.time(), "data": result}
+            return result
+
+        if last_status and last_status != 200:
+            logger.debug(f"_get_session_file_metadata all attempts failed, last_status={last_status}")
+        return {}
 
     def list_session_files(self, session_name: Optional[str] = None) -> List[dict]:
         """获取会话中的所有文件（包括用户上传和 AI 生成的）
@@ -948,7 +1053,10 @@ class BizGeminiClient:
         # 处理通过 fileId 引用的图片
         if file_ids and current_session and auto_save_images:
             try:
-                file_metadata = self._get_session_file_metadata(current_session)
+                logger.debug(f"[chat_full] current_session={current_session}")
+                logger.debug(f"[chat_full] file_ids={file_ids}")
+                file_metadata = self._get_session_file_metadata(current_session, filter_str="file_origin_type = AI_GENERATED")
+                logger.debug(f"[chat_full] file_metadata keys={list(file_metadata.keys())}")
                 if debug and file_metadata:
                     logger.debug("文件元数据:")
                     logger.debug(json.dumps(file_metadata, indent=2, ensure_ascii=False))
@@ -961,6 +1069,9 @@ class BizGeminiClient:
                         img = ChatImage.from_file_metadata(meta)
                         # 获取正确的 session 路径用于构造下载 URL
                         session_path = meta.get("session") or current_session
+                        # 确保 session 属性被设置（元数据中可能没有 session 字段）
+                        if not img.session:
+                            img.session = session_path
                         try:
                             # 使用正确的 session_name 和 file_id 构造下载 URL
                             image_data = self._download_file_with_jwt(
@@ -981,10 +1092,12 @@ class BizGeminiClient:
                                 logger.debug(f"下载图片失败: {e}")
                         result.images.append(img)
                     else:
-                        # 没有元数据时，使用基本信息创建
+                        # 没有元数据时，使用基本信息创建（包含 session 用于构造下载 URL）
                         img = ChatImage(
                             file_id=fid,
                             mime_type=finfo["mimeType"],
+                            session=current_session,
+                            file_name=f"gemini_{fid}.png",
                         )
                         result.images.append(img)
             except Exception as e:

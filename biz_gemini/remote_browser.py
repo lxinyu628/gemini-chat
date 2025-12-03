@@ -129,28 +129,54 @@ class RemoteBrowserSession:
 
             self._playwright = await async_playwright().start()
 
-            # 启动 Chromium（headless 模式）
-            # 注意：使用 launch_persistent_context 可以持久化用户数据，但这里我们使用临时目录
-            # 每次登录都是干净环境
-            self._browser = await self._playwright.chromium.launch(
-                headless=True,
-                args=[
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox',
-                    '--disable-dev-shm-usage',
-                    '--disable-gpu',
-                ]
-            )
+            # 优先尝试以“真浏览器”形态启动 Chrome，减少被判定为不安全的概率
+            launch_args = [
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-infobars",
+                "--window-size=1280,800",
+            ]
+
+            # 从配置读取 headless 设置，默认为 True（无头模式）
+            remote_browser_config = config.get("remote_browser", {})
+            headless = remote_browser_config.get("headless", True)
+
+            launch_kwargs = {
+                "headless": headless,
+                "args": launch_args,
+            }
+
+            logger.info(f"浏览器启动模式: headless={headless}")
+
+            browser = None
+            # 优先使用系统 Chrome（若 playwright 安装了 chrome）
+            try:
+                browser = await self._playwright.chromium.launch(channel="chrome", **launch_kwargs)
+                logger.info("使用 Chrome channel 启动浏览器")
+            except Exception as chrome_err:  # noqa: BLE001
+                logger.warning(f"Chrome channel 启动失败，回退 chromium: {chrome_err}")
+                browser = await self._playwright.chromium.launch(**launch_kwargs)
+
+            self._browser = browser
 
             # 创建上下文（带代理）
             context_options = {
                 "viewport": {"width": self.viewport_width, "height": self.viewport_height},
-                "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
             }
             if playwright_proxy:
                 context_options["proxy"] = playwright_proxy
 
             self._context = await self._browser.new_context(**context_options)
+            # 隐藏自动化标识，降低账号登录时的安全提示概率
+            try:
+                await self._context.add_init_script(
+                    "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+                )
+            except Exception as e:
+                logger.debug(f"设置 webdriver 伪装失败: {e}")
 
             # 创建页面
             self._page = await self._context.new_page()
@@ -225,7 +251,14 @@ class RemoteBrowserSession:
 
         # 检测是否已登录到主页
         if self._is_main_page(url):
-            await self._handle_login_success()
+            # 如果已经登录成功但凭证不完整，检查新 URL 是否包含 group_id
+            if self.status == BrowserSessionStatus.LOGIN_SUCCESS and self._login_config is None:
+                # 凭证不完整，检查新 URL 是否有 group_id
+                if "/cid/" in url:
+                    logger.info(f"检测到包含 group_id 的 URL: {url}")
+                    await self._handle_login_success()
+            elif self.status == BrowserSessionStatus.RUNNING:
+                await self._handle_login_success()
 
     def _is_main_page(self, url: str) -> bool:
         """判断是否已到达主页面（登录成功）"""
@@ -271,6 +304,44 @@ class RemoteBrowserSession:
                 for sep in ("/", "?", "#"):
                     after = after.split(sep, 1)[0]
                 group_id = after
+
+            # 如果 URL 中没有 group_id，尝试从页面中获取或等待重定向
+            if not group_id:
+                logger.info("URL 中没有 group_id，尝试从页面获取...")
+                self.message = "正在获取 group_id..."
+                await self._notify_status()
+
+                # 方法1: 尝试从页面的 JavaScript 变量或 DOM 中获取 group_id
+                try:
+                    # 等待页面完全加载
+                    await asyncio.sleep(2)
+
+                    # 尝试从 URL 中的重定向获取（有时页面会自动重定向到包含 cid 的 URL）
+                    current_url = self._page.url
+                    if "/cid/" in current_url:
+                        after = current_url.split("/cid/", 1)[1]
+                        for sep in ("/", "?", "#"):
+                            after = after.split(sep, 1)[0]
+                        group_id = after
+                        logger.info(f"从重定向 URL 获取到 group_id: {group_id}")
+                except Exception as e:
+                    logger.warning(f"从页面获取 group_id 失败: {e}")
+
+                # 方法2: 如果还是没有 group_id，尝试点击页面上的链接或等待用户操作
+                if not group_id:
+                    # 尝试从页面中查找包含 /cid/ 的链接
+                    try:
+                        links = await self._page.query_selector_all('a[href*="/cid/"]')
+                        if links:
+                            href = await links[0].get_attribute('href')
+                            if href and "/cid/" in href:
+                                after = href.split("/cid/", 1)[1]
+                                for sep in ("/", "?", "#"):
+                                    after = after.split(sep, 1)[0]
+                                group_id = after
+                                logger.info(f"从页面链接获取到 group_id: {group_id}")
+                    except Exception as e:
+                        logger.warning(f"从页面链接获取 group_id 失败: {e}")
 
             # 获取 cookies - 收集 auth.business.gemini.google 和 business.gemini.google 域的全部 cookie
             cookies = await self._context.cookies()
@@ -335,7 +406,30 @@ class RemoteBrowserSession:
                     "config": self._login_config,
                 })
             else:
-                self.message = f"登录成功但凭证不完整: csesidx={csesidx}, group_id={group_id}, cookie={'有' if secure_c_ses else '无'}"
+                # 凭证不完整，提供详细提示
+                missing = []
+                if not csesidx:
+                    missing.append("csesidx")
+                if not group_id:
+                    missing.append("group_id")
+                if not secure_c_ses:
+                    missing.append("cookie")
+
+                if not group_id and csesidx and secure_c_ses:
+                    # 只缺少 group_id，提示用户点击进入对话页面
+                    # 保持 RUNNING 状态，继续监听 URL 变化
+                    self.status = BrowserSessionStatus.RUNNING
+                    self.message = "登录成功，但需要获取 group_id。请在浏览器中点击任意对话或创建新对话"
+                    logger.info(f"等待用户操作以获取 group_id，当前 URL: {self._page.url}")
+
+                    # 广播提示消息
+                    await self._broadcast({
+                        "type": "status",
+                        "status": "waiting_group_id",
+                        "message": self.message,
+                    })
+                else:
+                    self.message = f"登录成功但凭证不完整，缺少: {', '.join(missing)}"
                 await self._notify_status()
 
         except Exception as e:

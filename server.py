@@ -7,9 +7,9 @@ from datetime import datetime, timezone
 from urllib.parse import quote_plus
 from typing import Any, Dict, List, Optional, Union
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect, Header, Form
+from fastapi import FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect, Header, Form, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -43,6 +43,43 @@ from version import VERSION, get_version_info, GITHUB_REPO
 logger = get_logger("server")
 
 app = FastAPI(title="Gemini Chat API", version=VERSION)
+
+
+# OpenAI 兼容的错误响应处理器
+@app.exception_handler(HTTPException)
+async def openai_error_handler(request: Request, exc: HTTPException):
+    """将 HTTPException 转换为 OpenAI 标准错误格式"""
+    # 只对 /v1/ 路径下的 API 返回 OpenAI 格式错误
+    if request.url.path.startswith("/v1/"):
+        error_type = "api_error"
+        if exc.status_code == 400:
+            error_type = "invalid_request_error"
+        elif exc.status_code == 401:
+            error_type = "authentication_error"
+        elif exc.status_code == 403:
+            error_type = "permission_error"
+        elif exc.status_code == 404:
+            error_type = "not_found_error"
+        elif exc.status_code == 429:
+            error_type = "rate_limit_error"
+
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "error": {
+                    "message": exc.detail,
+                    "type": error_type,
+                    "param": None,
+                    "code": str(exc.status_code)
+                }
+            }
+        )
+    # 非 /v1/ 路径保持 FastAPI 默认格式
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail}
+    )
+
 
 # CORS 配置
 app.add_middleware(
@@ -126,19 +163,30 @@ def _check_primary_worker() -> bool:
 
 
 def _build_account_chooser_url(config: dict) -> Optional[str]:
-    """构造 account-chooser URL，优先带上 group_id/csesidx，便于远程浏览器跳转到正确账号。"""
+    """构造 account-chooser URL，用于已有 session 需要复用的场景。
+
+    注意：account-chooser 仅用于已有登录记录需要复用 session 的情况。
+    首次登录应该直接访问 https://business.gemini.google/
+
+    官网的 URL 格式：
+    https://auth.business.gemini.google/account-chooser?autoSelectSession=false&continueUrl=
+    https://business.gemini.google/home/cid/{group_id}?mods=&e=&project={project_id}&refCid={group_id}&csesidx={csesidx}
+    """
     try:
         group_id = config.get("group_id")
         csesidx = config.get("csesidx")
 
-        base_continue = "https://business.gemini.google/home/"
-        if group_id:
-            base_continue = f"https://business.gemini.google/home/cid/{group_id}/"
-        if csesidx:
-            sep = "?" if "?" not in base_continue else "&"
-            base_continue = f"{base_continue}{sep}csesidx={csesidx}"
+        # 只有同时有 group_id 和 csesidx 时才构造 account-chooser URL
+        # 否则应该让用户直接访问 business.gemini.google 进行首次登录
+        if not group_id or not csesidx:
+            return None
 
-        return f"https://auth.business.gemini.google/account-chooser?continueUrl={quote_plus(base_continue)}"
+        # 构造 continueUrl，与官网格式一致
+        # 完整格式：包含 mods, e, refCid, csesidx 参数
+        base_continue = f"https://business.gemini.google/home/cid/{group_id}?mods=&e=&refCid={group_id}&csesidx={csesidx}"
+
+        # 添加 autoSelectSession=false 参数，与官网一致
+        return f"https://auth.business.gemini.google/account-chooser?autoSelectSession=false&continueUrl={quote_plus(base_continue)}"
     except Exception:
         return None
 
@@ -216,13 +264,26 @@ async def shutdown_event() -> None:
 
 class Message(BaseModel):
     role: str
-    content: str
+    # 兼容 OpenAI 标准格式的字符串与 content parts 两种形式
+    content: Union[str, List[Dict[str, Any]]]
 
 
 class ChatRequest(BaseModel):
     model: str = "business-gemini"
     messages: List[Message]
     stream: bool = False
+    # OpenAI 标准参数（接收以保证兼容性，Gemini API 不一定支持）
+    temperature: Optional[float] = None
+    top_p: Optional[float] = None
+    max_tokens: Optional[int] = None
+    presence_penalty: Optional[float] = None
+    frequency_penalty: Optional[float] = None
+    stop: Optional[Union[str, List[str]]] = None
+    n: Optional[int] = None
+    user: Optional[str] = None
+    logprobs: Optional[bool] = None
+    top_logprobs: Optional[int] = None
+    # 自定义扩展参数
     session_id: Optional[str] = None
     session_name: Optional[str] = None
     file_ids: Optional[List[str]] = None
@@ -826,6 +887,24 @@ async def list_sessions() -> list:
 
         return result
 
+    except RuntimeError as e:
+        error_msg = str(e)
+        # 检查是否是权限错误（403）- 这种情况需要告知前端
+        if "403" in error_msg or "PERMISSION_DENIED" in error_msg:
+            logger.error(f"获取会话列表权限错误: {error_msg}")
+            raise HTTPException(status_code=403, detail=f"权限不足，请检查 group_id 配置是否正确: {error_msg}")
+        # 其他错误返回本地缓存
+        logger.warning(f"获取会话列表失败，返回本地缓存: {e}")
+        result = []
+        for sid, data in sessions.items():
+            result.append({
+                "session_id": sid,
+                "title": data.get("title", "新对话"),
+                "created_at": data.get("created_at", 0),
+                "message_count": len(data.get("messages", [])),
+            })
+        result.sort(key=lambda x: x["created_at"], reverse=True)
+        return result
     except Exception as e:
         # 出错时返回本地缓存
         logger.warning(f"获取会话列表失败，返回本地缓存: {e}")
@@ -929,7 +1008,7 @@ async def delete_session(session_id: str) -> dict:
 
 @app.get("/api/sessions/{session_id}/messages")
 async def get_session_messages(session_id: str, session_name: Optional[str] = None) -> dict:
-    """获取会话消息历史 - 优先本地存储，其次调用 Google API"""
+    """获取会话消息历史 - 始终从 Google API 拉取，避免本地缓存丢失信息"""
     def _parse_dt(ts: Optional[str]) -> Optional[datetime]:
         if not ts:
             return None
@@ -944,13 +1023,7 @@ async def get_session_messages(session_id: str, session_name: Optional[str] = No
             return ""
         return dt_obj.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
-    # 1. 优先从本地存储获取
-    if session_id in sessions:
-        local_messages = sessions[session_id].get("messages", [])
-        if local_messages:
-            return {"messages": local_messages}
-
-    # 2. 本地没有，尝试从 Google API 获取
+    # 仅依赖 Google 接口返回的消息（避免本地缓存造成信息缺失）
     try:
         config = load_config()
         missing = [k for k in ("secure_c_ses", "csesidx", "group_id") if not config.get(k)]
@@ -1084,7 +1157,44 @@ async def get_session_messages(session_id: str, session_name: Optional[str] = No
             detailed_answer = turn.get("detailedAssistAnswer", {})
             replies = detailed_answer.get("replies", [])
 
-            skipped_info = None if replies else build_skipped_message(detailed_answer)
+            # 如果 detailedAssistAnswer 没有 replies，尝试从 diagnosticInfo.plannerSteps 提取回复
+            # 这种情况可能发生在 Google API 只返回最近一条的详细信息时
+            if not replies and planner_steps:
+                # 从 plannerSteps 中提取非思考内容作为回复
+                fallback_texts = []
+                fallback_thoughts = []
+                for step in planner_steps:
+                    plan_step = step.get("planStep", {})
+                    if not plan_step:
+                        continue
+                    parts = plan_step.get("parts") or []
+                    for p in parts:
+                        if isinstance(p, dict) and p.get("text"):
+                            text = p["text"].strip()
+                            if text:
+                                # 检查是否是思考内容（通常以 ** 开头或很短）
+                                if text.startswith("**") and text.endswith("**\n"):
+                                    fallback_thoughts.append(text)
+                                else:
+                                    fallback_texts.append(text)
+
+                if fallback_texts:
+                    # 合并所有文本片段
+                    combined_text = "".join(fallback_texts)
+                    msg_data = {
+                        "role": "assistant",
+                        "content": combined_text,
+                        "timestamp": assistant_ts,
+                    }
+                    if fallback_thoughts:
+                        msg_data["thoughts"] = fallback_thoughts
+                    if thinking_duration_ms is not None:
+                        msg_data["thinking_duration_ms"] = thinking_duration_ms
+                    messages.append(msg_data)
+                    # 跳过后续的 replies 处理
+                    replies = None
+
+            skipped_info = None if replies else build_skipped_message(detailed_answer) if replies is not None else None
 
             if replies:
                 # 分别收集文本、思考和图片
@@ -1174,7 +1284,16 @@ async def get_session_messages(session_id: str, session_name: Optional[str] = No
         # 批量获取文件元数据并更新 messages（包括图片和用户上传的附件）
         if (all_file_ids or all_context_file_ids) and full_session_name:
             try:
-                file_metadata = biz_client._get_session_file_metadata(full_session_name)
+                file_metadata: dict = {}
+                # 优先获取 AI 生成的文件（通常是图片）
+                if all_file_ids:
+                    file_metadata.update(biz_client._get_session_file_metadata(full_session_name, filter_str="file_origin_type = AI_GENERATED"))
+                # 用户上传的上下文文件需要 USER_UPLOADED
+                if all_context_file_ids:
+                    file_metadata.update(biz_client._get_session_file_metadata(full_session_name, filter_str="file_origin_type = USER_UPLOADED"))
+                logger.debug(f"[get_session_messages] full_session_name={full_session_name}")
+                logger.debug(f"[get_session_messages] all_file_ids={all_file_ids}")
+                logger.debug(f"[get_session_messages] file_metadata keys={list(file_metadata.keys())}")
 
                 # 从 full_session_name 提取 session_id 用于构造 URL
                 # 格式: projects/.../sessions/17970885850102128104
@@ -1191,13 +1310,41 @@ async def get_session_messages(session_id: str, session_name: Optional[str] = No
 
                             # 构建完整的图片信息
                             local_filename = meta.get("name") or img_info.get("fileName", "") or f"gemini_{file_id}.png"
+                            # byteSize 在 API 响应中是字符串，需要转换为整数
+                            byte_size_str = meta.get("byteSize")
+                            byte_size = int(byte_size_str) if byte_size_str else None
+                            token_count_str = meta.get("tokenCount")
+                            token_count = int(token_count_str) if token_count_str else None
+                            quota_percentage = meta.get("quotaPercentage")
+                            download_uri = meta.get("downloadUri")
+                            upload_time = meta.get("uploadTime")
+                            file_origin_type = meta.get("fileOriginType")
+                            # 解析缩略图
+                            thumbnails = {}
+                            for view_name, view_data in (meta.get("views") or {}).items():
+                                img_chars = view_data.get("imageCharacteristics") or {}
+                                thumbnails[view_name] = {
+                                    "view_id": view_data.get("viewId"),
+                                    "uri": view_data.get("uri"),
+                                    "mime_type": view_data.get("mimeType"),
+                                    "byte_size": int(view_data["byteSize"]) if view_data.get("byteSize") else None,
+                                    "width": img_chars.get("width"),
+                                    "height": img_chars.get("height"),
+                                }
                             enriched_img = {
                                 "file_id": file_id,
                                 "file_name": local_filename,
                                 "mime_type": meta.get("mimeType") or img_info.get("mimeType", "image/png"),
-                                "byte_size": meta.get("byteSize"),
+                                "byte_size": byte_size,
+                                "token_count": token_count,
+                                "quota_percentage": quota_percentage,
+                                "download_uri": download_uri,
+                                "upload_time": upload_time,
+                                "file_origin_type": file_origin_type,
                                 "session": meta.get("session") or full_session_name,
                             }
+                            if thumbnails:
+                                enriched_img["thumbnails"] = thumbnails
 
                             # 检查本地是否有缓存
                             local_path = os.path.join(IMAGES_DIR, local_filename)
@@ -1263,23 +1410,21 @@ async def update_session_title(session_id: str, title: str) -> dict:
     return {"success": True}
 
 
-@app.post("/v1/chat/completions", response_model=None)
-async def chat_completions(
+async def _chat_completions_handler(
     request: ChatRequest,
-    x_session_id: Optional[str] = Header(None, alias="X-Session-Id"),
-    conversation_id: Optional[str] = Header(None, alias="Conversation-Id"),
+    x_session_id: Optional[str],
+    conversation_id: Optional[str],
+    response_obj: Response,
+    strict_openai: bool = False,
 ) -> Union[dict, StreamingResponse]:
-    """OpenAI 兼容的聊天接口
+    """共享的 ChatCompletion 处理逻辑。
 
-    支持通过 Header 传递会话 ID 以保持上下文（适配 ChatWebUI/Lobe Chat 等通用前端）：
-    - X-Session-Id: 优先级最高
-    - Conversation-Id: 次优先级
-    - body.session_id: 第三优先级
-    - 如果都没有，则创建新会话
-
-    通用前端可在自定义 Header 中设置 X-Session-Id 或 Conversation-Id 保持上下文，
-    否则每次请求都会创建新会话。
+    strict_openai=True 时：
+    - 只返回/流出 OpenAI 官方字段，不混入自定义 images/thoughts/final_metadata
+    - 使用响应头传递 session 信息，避免破坏协议
     """
+    response_obj = response_obj or Response()
+
     try:
         config = load_config()
         missing = [k for k in ("secure_c_ses", "csesidx", "group_id") if not config.get(k)]
@@ -1298,7 +1443,26 @@ async def chat_completions(
 
     # 会话 ID 优先级: X-Session-Id header > Conversation-Id header > body.session_id > 新建
     session_id = x_session_id or conversation_id or request.session_id or str(uuid.uuid4())
-    client, session_data, canonical_session_id = get_or_create_client(session_id, request.session_name)
+    try:
+        client, session_data, canonical_session_id = get_or_create_client(session_id, request.session_name)
+    except RuntimeError as e:
+        error_msg = str(e)
+        # 检查是否是权限错误（403）
+        if "403" in error_msg or "PERMISSION_DENIED" in error_msg:
+            raise HTTPException(status_code=403, detail=f"权限不足，请检查 group_id 配置是否正确: {error_msg}")
+        # 检查是否是认证错误
+        if "401" in error_msg or "过期" in error_msg or "cookie" in error_msg.lower():
+            raise HTTPException(status_code=401, detail=f"登录已过期，请重新登录: {error_msg}")
+        # 其他错误
+        raise HTTPException(status_code=500, detail=f"创建会话失败: {error_msg}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"创建会话失败: {str(e)}")
+
+    # 将真实 session id 通过 header 返回（符合协议且方便第三方前端复用）
+    if canonical_session_id:
+        response_obj.headers["X-Session-Id"] = canonical_session_id
+    if session_data.get("session_name"):
+        response_obj.headers["X-Session-Name"] = session_data["session_name"]
 
     # 获取待发送的文件 ID
     pending_file_ids = session_data.get("pending_file_ids", [])
@@ -1335,22 +1499,135 @@ async def chat_completions(
     # 保存用户消息
     user_message = request.messages[-1] if request.messages else None
     if user_message:
-        user_msg_data = {
-            "role": user_message.role,
-            "content": user_message.content,
-            "timestamp": time.time(),
-        }
-        if attachment_metadata:
-            user_msg_data["attachments"] = attachment_metadata
-        session_data["messages"].append(user_msg_data)
-        # 更新会话标题（使用第一条消息）
-        if len(session_data["messages"]) == 1:
-            title = user_message.content[:30]
-            if len(user_message.content) > 30:
+        # 仅记录标题，不缓存整段消息，避免本地存储占用及信息不一致
+        if not session_data.get("title"):
+            if isinstance(user_message.content, str):
+                preview = user_message.content
+            elif isinstance(user_message.content, list):
+                # 文本块拼接作为标题预览
+                preview_parts = []
+                for part in user_message.content:
+                    if isinstance(part, dict) and part.get("type") == "text" and part.get("text"):
+                        preview_parts.append(str(part["text"]))
+                preview = "\n".join(preview_parts) if preview_parts else ""
+            else:
+                preview = ""
+            title = preview[:30]
+            if len(preview) > 30:
                 title += "..."
-            session_data["title"] = title
+            session_data["title"] = title or "新对话"
 
     messages = [{"role": m.role, "content": m.content} for m in request.messages]
+    full_session_name = session_data.get("session_name")
+    api_session_id = full_session_name.split("/")[-1] if full_session_name and "/" in full_session_name else canonical_session_id
+    encoded_session_name = quote_plus(full_session_name) if full_session_name else None
+    biz_client = session_data.get("biz_client")
+
+    def _parse_dt(ts: Optional[str]) -> Optional[datetime]:
+        if not ts:
+            return None
+        try:
+            return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    def _to_iso_z(dt_obj: Optional[datetime]) -> str:
+        if not dt_obj:
+            return ""
+        return dt_obj.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    def fetch_latest_turn_meta() -> Optional[dict]:
+        """从 Google 接口获取最新一条回复的时间和思考耗时"""
+        if not biz_client or not full_session_name:
+            return None
+        try:
+            api_resp = biz_client.get_session(full_session_name)
+            session_obj = api_resp.get("session", {})
+            turns = session_obj.get("turns", [])
+            if not turns:
+                return None
+            last_turn = turns[-1]
+
+            # 获取 detailedAssistAnswer
+            detailed_answer = last_turn.get("detailedAssistAnswer", {})
+            diagnostic_info = (
+                last_turn.get("diagnosticInfo")
+                or detailed_answer.get("diagnosticInfo")
+                or {}
+            )
+            planner_steps = diagnostic_info.get("plannerSteps") or []
+
+            # 构建 planStep 详情列表（文本和时间）
+            plan_steps_detail: list[dict] = []
+            for step in planner_steps:
+                ct = _parse_dt(step.get("createTime"))
+                plan_step = step.get("planStep")
+                if ct and plan_step:
+                    parts = plan_step.get("parts") or []
+                    step_text = ""
+                    for p in parts:
+                        if isinstance(p, dict) and p.get("text"):
+                            step_text += p["text"]
+                    plan_steps_detail.append({"ts": ct, "text": step_text.strip()})
+
+            # 从 replies 中提取思考链文本
+            replies = detailed_answer.get("replies") or []
+            thought_texts: list[str] = []
+            for reply in replies:
+                grounded_content = reply.get("groundedContent", {})
+                content = grounded_content.get("content", {})
+                text = content.get("text", "")
+                is_thought = content.get("thought", False)
+                if text and is_thought:
+                    thought_texts.append(text.strip())
+
+            # 匹配思考文本与 planStep，提取精确的思考耗时
+            matched_plan_ts: list[datetime] = []
+            if thought_texts and plan_steps_detail:
+                for thought in thought_texts:
+                    for ps in plan_steps_detail:
+                        if not ps["ts"] or not ps["text"]:
+                            continue
+                        # 检查 planStep 文本是否包含在思考文本中，或思考文本包含在 planStep 中
+                        if ps["text"] in thought or thought in ps["text"]:
+                            if ps["ts"] not in matched_plan_ts:
+                                matched_plan_ts.append(ps["ts"])
+
+            thinking_duration_ms = None
+            if len(matched_plan_ts) >= 2:
+                matched_plan_ts = sorted(matched_plan_ts)
+                thinking_duration_ms = int((matched_plan_ts[-1] - matched_plan_ts[0]).total_seconds() * 1000)
+            elif len(matched_plan_ts) == 1 and plan_steps_detail:
+                # 仅匹配到一个步骤时，尝试使用它之后的下一个 planStep 作为结束时间
+                matched_ts = matched_plan_ts[0]
+                sorted_steps = sorted(plan_steps_detail, key=lambda x: x["ts"] or datetime.min)
+                for idx, ps in enumerate(sorted_steps):
+                    if ps["ts"] == matched_ts and idx + 1 < len(sorted_steps):
+                        next_ts = sorted_steps[idx + 1]["ts"]
+                        thinking_duration_ms = int((next_ts - matched_ts).total_seconds() * 1000)
+                        break
+
+            # 如果没有匹配到思考文本，回退到使用所有 planStep 时间
+            if thinking_duration_ms is None and len(plan_steps_detail) >= 2:
+                all_times = sorted([ps["ts"] for ps in plan_steps_detail if ps["ts"]])
+                if len(all_times) >= 2:
+                    thinking_duration_ms = int((all_times[-1] - all_times[0]).total_seconds() * 1000)
+
+            assistant_ts = _parse_dt(last_turn.get("createdAt"))
+            if plan_steps_detail:
+                # 使用最后一个 planStep 的时间作为助手回复时间
+                sorted_steps = sorted(plan_steps_detail, key=lambda x: x["ts"] or datetime.min)
+                assistant_ts = sorted_steps[-1]["ts"]
+            assistant_iso = _to_iso_z(assistant_ts) if assistant_ts else None
+            return {
+                "assistant_timestamp": assistant_iso,
+                "thinking_duration_ms": thinking_duration_ms,
+            }
+        except Exception as e:
+            logger.warning(f"获取实时思考耗时失败: {e}")
+            return None
+
+    include_thoughts_flag = request.include_thoughts and (not strict_openai)
 
     if request.stream:
         async def generate():
@@ -1364,12 +1641,11 @@ async def chat_completions(
                     messages=messages,
                     stream=True,
                     include_image_data=request.include_image_data,
-                    include_thoughts=request.include_thoughts,
+                    include_thoughts=include_thoughts_flag,
                     embed_images_in_content=request.embed_images_in_content,
                     file_ids=file_ids_to_send,
                 )
                 full_content = ""
-                images_data = None
                 thoughts_data = []
                 for chunk in response:
                     delta = chunk.get("choices", [{}])[0].get("delta", {})
@@ -1379,35 +1655,73 @@ async def chat_completions(
                         full_content += delta_content
                     if delta_thought:
                         thoughts_data.append(delta_thought)
-                    # 检查是否有图片数据
-                    if "images" in chunk:
-                        images_data = chunk["images"]
-                    yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+
+                    if strict_openai:
+                        # strict 模式：移除非标准字段，只保留 OpenAI 标准字段
+                        clean_chunk = {
+                            "id": chunk.get("id"),
+                            "object": chunk.get("object"),
+                            "created": chunk.get("created"),
+                            "model": chunk.get("model"),
+                            "choices": chunk.get("choices", []),
+                        }
+                        # 移除 delta 中的非标准字段（如 thought）
+                        for choice in clean_chunk.get("choices", []):
+                            if "delta" in choice and "thought" in choice["delta"]:
+                                del choice["delta"]["thought"]
+                        yield f"data: {json.dumps(clean_chunk, ensure_ascii=False)}\n\n"
+                    else:
+                        # 非 strict 模式：保留自定义字段，增强图片信息
+                        if "images" in chunk:
+                            raw_images = chunk.get("images") or []
+                            enriched_images = []
+                            for img in raw_images:
+                                img_copy = dict(img)
+                                file_obj = img.get("file") or {}
+                                file_id = (
+                                    img.get("file_id")
+                                    or img.get("fileId")
+                                    or file_obj.get("file_id")
+                                    or file_obj.get("fileId")
+                                )
+                                if file_id:
+                                    img_copy.setdefault("file_id", file_id)
+                                mime_type = img.get("mime_type") or img.get("mimeType") or file_obj.get("mimeType")
+                                if mime_type:
+                                    img_copy.setdefault("mime_type", mime_type)
+                                if file_id and api_session_id:
+                                    download_url = f"/api/sessions/{api_session_id}/images/{file_id}"
+                                    if encoded_session_name:
+                                        download_url += f"?session_name={encoded_session_name}"
+                                    img_copy.setdefault("download_uri", download_url)
+                                    img_copy.setdefault("url", download_url)
+                                enriched_images.append(img_copy)
+                            chunk["images"] = enriched_images
+                        yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                # 仅在非 strict 模式下附加额外元数据
+                if not strict_openai:
+                    meta = fetch_latest_turn_meta()
+                    if meta:
+                        yield f"data: {json.dumps({'final_metadata': meta}, ensure_ascii=False)}\n\n"
                 yield "data: [DONE]\n\n"
 
-                # 保存助手回复
-                if full_content or images_data or thoughts_data:
-                    msg_data = {
-                        "role": "assistant",
-                        "content": full_content,
-                        "timestamp": time.time(),
-                    }
-                    if images_data:
-                        msg_data["images"] = images_data
-                    if thoughts_data:
-                        msg_data["thoughts"] = thoughts_data
-                    session_data["messages"].append(msg_data)
             except Exception as e:
                 error_data = {"error": {"message": str(e)}}
                 yield f"data: {json.dumps(error_data)}\n\n"
 
+        stream_headers = {
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+        if canonical_session_id:
+            stream_headers["X-Session-Id"] = canonical_session_id
+        if session_data.get("session_name"):
+            stream_headers["X-Session-Name"] = session_data["session_name"]
+
         return StreamingResponse(
             generate(),
             media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-            }
+            headers=stream_headers,
         )
     else:
         try:
@@ -1420,7 +1734,7 @@ async def chat_completions(
                 messages=messages,
                 stream=False,
                 include_image_data=request.include_image_data,
-                include_thoughts=request.include_thoughts,
+                include_thoughts=include_thoughts_flag,
                 embed_images_in_content=request.embed_images_in_content,
                 file_ids=file_ids_to_send,
             )
@@ -1434,20 +1748,26 @@ async def chat_completions(
             if "thoughts" in response:
                 logger.debug(f"Thoughts count: {len(response.get('thoughts', []))}")
 
-            # 保存助手回复
-            msg_data = {
-                "role": "assistant",
-                "content": content if isinstance(content, str) else json.dumps(content),
-                "timestamp": time.time(),
-            }
-            if "images" in response:
-                msg_data["images"] = response["images"]
-            if "thoughts" in response:
-                msg_data["thoughts"] = response["thoughts"]
-            session_data["messages"].append(msg_data)
+            if strict_openai:
+                # 返回标准字段，避免混入自定义 keys
+                clean_resp = {
+                    "id": response.get("id"),
+                    "object": response.get("object"),
+                    "created": response.get("created"),
+                    "model": response.get("model"),
+                    "choices": response.get("choices", []),
+                    "usage": response.get("usage"),
+                }
+                if response.get("system_fingerprint"):
+                    clean_resp["system_fingerprint"] = response.get("system_fingerprint")
+                return clean_resp
+
             # 返回 canonical session_id 和 session_name，供前端更新状态
             response["session_id"] = canonical_session_id
             response["session_name"] = session_data.get("session_name")
+            meta = fetch_latest_turn_meta()
+            if meta:
+                response.update(meta)
             return response
         except Exception as e:
             import traceback
@@ -1456,17 +1776,58 @@ async def chat_completions(
             raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/v1/chat/completions", response_model=None)
+async def chat_completions(
+    request: ChatRequest,
+    x_session_id: Optional[str] = Header(None, alias="X-Session-Id"),
+    conversation_id: Optional[str] = Header(None, alias="Conversation-Id"),
+    response: Response = None,
+) -> Union[dict, StreamingResponse]:
+    """OpenAI 兼容的聊天接口（保持当前前端行为）。"""
+    return await _chat_completions_handler(
+        request=request,
+        x_session_id=x_session_id,
+        conversation_id=conversation_id,
+        response_obj=response,
+        strict_openai=False,
+    )
+
+
+@app.post("/v1/openai/chat/completions", response_model=None)
+async def chat_completions_strict(
+    request: ChatRequest,
+    x_session_id: Optional[str] = Header(None, alias="X-Session-Id"),
+    conversation_id: Optional[str] = Header(None, alias="Conversation-Id"),
+    response: Response = None,
+) -> Union[dict, StreamingResponse]:
+    """严格遵循 OpenAI Chat Completions 协议的接口。
+
+    - 不返回自定义字段（images/thoughts/final_metadata/session_id）
+    - 会话信息通过响应头 X-Session-Id / X-Session-Name 传递
+    - 适配 ChatWebUI / Lobe Chat 等严格校验第三方前端
+    """
+    return await _chat_completions_handler(
+        request=request,
+        x_session_id=x_session_id,
+        conversation_id=conversation_id,
+        response_obj=response,
+        strict_openai=True,
+    )
+
+
 @app.get("/v1/models")
 async def list_models() -> dict:
-    """列出可用模型"""
+    """列出可用模型（OpenAI 兼容格式）"""
+    # 使用固定时间戳以保持一致性
+    created_ts = 1700000000
     return {
         "object": "list",
         "data": [
-            {"id": "auto", "object": "model", "owned_by": "google", "name": "自动", "description": "Gemini Enterprise 会选择最合适的选项"},
-            {"id": "gemini-2.5-flash", "object": "model", "owned_by": "google", "name": "Gemini 2.5 Flash", "description": "适用于执行日常任务"},
-            {"id": "gemini-2.5-pro", "object": "model", "owned_by": "google", "name": "Gemini 2.5 Pro", "description": "最适用于执行复杂任务"},
-            {"id": "gemini-3-pro-preview", "object": "model", "owned_by": "google", "name": "Gemini 3 Pro Preview", "description": "先进的推理模型"},
-            {"id": "business-gemini", "object": "model", "owned_by": "google", "name": "Business Gemini", "description": "默认自动选择"},
+            {"id": "auto", "object": "model", "created": created_ts, "owned_by": "google"},
+            {"id": "gemini-2.5-flash", "object": "model", "created": created_ts, "owned_by": "google"},
+            {"id": "gemini-2.5-pro", "object": "model", "created": created_ts, "owned_by": "google"},
+            {"id": "gemini-3-pro-preview", "object": "model", "created": created_ts, "owned_by": "google"},
+            {"id": "business-gemini", "object": "model", "created": created_ts, "owned_by": "google"},
         ]
     }
 
