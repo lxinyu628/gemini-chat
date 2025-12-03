@@ -1087,7 +1087,8 @@ async function sendMessage () {
         session_id: state.currentConversationId,
         session_name: state.currentSessionName,
         file_ids: pendingAttachments.map(f => f.file_id).filter(Boolean),
-        include_image_data: true
+        include_image_data: true,
+        include_thoughts: true
       })
     });
 
@@ -1109,6 +1110,7 @@ async function sendMessage () {
     let buffer = '';
     let fullText = '';
     let imagesData = null;
+    let thinkingParts = [];
     let done = false;
 
     const appendStreamChunk = (dataStr) => {
@@ -1130,11 +1132,24 @@ async function sendMessage () {
 
       const delta = payload.choices?.[0]?.delta || {};
       const deltaContent = delta.content || '';
+      const deltaThought = delta.thought || '';
+      const messageThoughts = payload.thoughts || payload.choices?.[0]?.message?.thoughts;
 
       if (deltaContent) {
         fullText += deltaContent;
         if (textEl) {
           textEl.textContent = fullText;
+        }
+      }
+
+      if (deltaThought) {
+        thinkingParts.push(deltaThought);
+      }
+      if (messageThoughts) {
+        if (Array.isArray(messageThoughts)) {
+          thinkingParts.push(...messageThoughts);
+        } else {
+          thinkingParts.push(messageThoughts);
         }
       }
 
@@ -1169,6 +1184,15 @@ async function sendMessage () {
 
     if (imagesData && imagesData.length > 0) {
       renderImagesForMessage(assistantMsgDiv, imagesData);
+    }
+
+    const thinkingContent = thinkingParts.length > 0 ? thinkingParts.join('\n') : null;
+    if (thinkingContent) {
+      const contentDiv = assistantMsgDiv.querySelector('.message-content');
+      if (contentDiv) {
+        const thinkingBlock = createThinkingBlock(thinkingContent, false);
+        contentDiv.insertBefore(thinkingBlock, contentDiv.firstChild);
+      }
     }
 
     ensureAssistantActions(assistantMsgDiv, fullText);
