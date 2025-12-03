@@ -667,41 +667,47 @@ class BizGeminiClient:
                        可选值: "file_origin_type = AI_GENERATED" 只获取 AI 生成的文件
                               "file_origin_type = USER_UPLOADED" 只获取用户上传的文件
         """
-        # 标准化 session_name 格式
-        # API 期望格式: collections/default_collection/engines/agentspace-engine/sessions/xxx
-        # 但可能传入: projects/.../collections/default_collection/engines/agentspace-engine/sessions/xxx
+        # 构造可能的 session name 取值，兼容多种格式
+        session_candidates: List[str] = []
         normalized_session_name = session_name
-        if "collections/" in session_name:
-            # 提取从 collections/ 开始的部分
-            idx = session_name.find("collections/")
-            if idx > 0:
-                normalized_session_name = session_name[idx:]
+        if session_name:
+            session_candidates.append(session_name)
+            if "collections/" in session_name:
+                idx = session_name.find("collections/")
+                if idx >= 0:
+                    normalized_session_name = session_name[idx:]
+                if normalized_session_name not in session_candidates:
+                    session_candidates.append(normalized_session_name)
+            else:
+                normalized_session_name = session_name
 
-        jwt = self.jwt_manager.get_jwt()
-        body = {
-            "configId": self.group_id,
-            "additionalParams": {"token": "-"},
-            "listSessionFileMetadataRequest": {
-                "name": normalized_session_name,
-            }
-        }
+            # 带 project_id 的完整路径（widgetListSessionFileMetadata 返回的格式）
+            project_id = self.config.get("project_id")
+            if project_id and normalized_session_name.startswith("collections/"):
+                prefixed = f"projects/{project_id}/locations/global/{normalized_session_name}"
+                if prefixed not in session_candidates:
+                    session_candidates.append(prefixed)
 
-        # 只有非空时才添加 filter
-        if filter_str:
-            body["listSessionFileMetadataRequest"]["filter"] = filter_str
+            # 最后一段纯 session_id（以防接口只接受 ID）
+            session_id_only = session_name.split("/")[-1]
+            if session_id_only and session_id_only not in session_candidates:
+                session_candidates.append(session_id_only)
 
-        resp = requests.post(
-            LIST_FILE_METADATA_URL,
-            headers=build_headers(jwt),
-            json=body,
-            proxies=self._proxies,
-            verify=False,
-            timeout=30,
-        )
+        result: dict = {}
+        last_status: Optional[int] = None
 
-        if resp.status_code == 401:
-            self.jwt_manager.refresh()
+        for candidate in session_candidates:
             jwt = self.jwt_manager.get_jwt()
+            body = {
+                "configId": self.group_id,
+                "additionalParams": {"token": "-"},
+                "listSessionFileMetadataRequest": {
+                    "name": candidate,
+                }
+            }
+            if filter_str:
+                body["listSessionFileMetadataRequest"]["filter"] = filter_str
+
             resp = requests.post(
                 LIST_FILE_METADATA_URL,
                 headers=build_headers(jwt),
@@ -711,21 +717,46 @@ class BizGeminiClient:
                 timeout=30,
             )
 
-        if resp.status_code != 200:
-            logger.debug(f"_get_session_file_metadata error: {resp.status_code} {resp.text[:200]}")
-            return {}
+            # JWT 失效时刷新重试当前 candidate
+            if resp.status_code == 401:
+                self.jwt_manager.refresh()
+                jwt = self.jwt_manager.get_jwt()
+                resp = requests.post(
+                    LIST_FILE_METADATA_URL,
+                    headers=build_headers(jwt),
+                    json=body,
+                    proxies=self._proxies,
+                    verify=False,
+                    timeout=30,
+                )
 
-        data = resp.json()
-        logger.debug(f"_get_session_file_metadata response: {json.dumps(data, ensure_ascii=False)[:500]}")
+            last_status = resp.status_code
+            if resp.status_code != 200:
+                logger.debug(f"_get_session_file_metadata error (name={candidate}): {resp.status_code} {resp.text[:200]}")
+                continue
 
-        result = {}
-        file_metadata_list = data.get("listSessionFileMetadataResponse", {}).get("fileMetadata", [])
-        for fm in file_metadata_list:
-            fid = fm.get("fileId")
-            if fid:
-                result[fid] = fm
+            data = resp.json()
+            logger.debug(f"_get_session_file_metadata response (name={candidate}): {json.dumps(data, ensure_ascii=False)[:500]}")
 
-        return result
+            file_metadata_list = data.get("listSessionFileMetadataResponse", {}).get("fileMetadata", [])
+            if not file_metadata_list:
+                continue
+
+            for fm in file_metadata_list:
+                fid = fm.get("fileId")
+                if fid:
+                    result[fid] = fm
+
+            # 已拿到数据，直接返回
+            if result:
+                return result
+
+        if result:
+            return result
+
+        if last_status and last_status != 200:
+            logger.debug(f"_get_session_file_metadata all attempts failed, last_status={last_status}")
+        return {}
 
     def list_session_files(self, session_name: Optional[str] = None) -> List[dict]:
         """获取会话中的所有文件（包括用户上传和 AI 生成的）

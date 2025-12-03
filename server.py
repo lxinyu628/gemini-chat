@@ -1258,13 +1258,38 @@ async def get_session_messages(session_id: str, session_name: Optional[str] = No
                             # byteSize 在 API 响应中是字符串，需要转换为整数
                             byte_size_str = meta.get("byteSize")
                             byte_size = int(byte_size_str) if byte_size_str else None
+                            token_count_str = meta.get("tokenCount")
+                            token_count = int(token_count_str) if token_count_str else None
+                            quota_percentage = meta.get("quotaPercentage")
+                            download_uri = meta.get("downloadUri")
+                            upload_time = meta.get("uploadTime")
+                            file_origin_type = meta.get("fileOriginType")
+                            # 解析缩略图
+                            thumbnails = {}
+                            for view_name, view_data in (meta.get("views") or {}).items():
+                                img_chars = view_data.get("imageCharacteristics") or {}
+                                thumbnails[view_name] = {
+                                    "view_id": view_data.get("viewId"),
+                                    "uri": view_data.get("uri"),
+                                    "mime_type": view_data.get("mimeType"),
+                                    "byte_size": int(view_data["byteSize"]) if view_data.get("byteSize") else None,
+                                    "width": img_chars.get("width"),
+                                    "height": img_chars.get("height"),
+                                }
                             enriched_img = {
                                 "file_id": file_id,
                                 "file_name": local_filename,
                                 "mime_type": meta.get("mimeType") or img_info.get("mimeType", "image/png"),
                                 "byte_size": byte_size,
+                                "token_count": token_count,
+                                "quota_percentage": quota_percentage,
+                                "download_uri": download_uri,
+                                "upload_time": upload_time,
+                                "file_origin_type": file_origin_type,
                                 "session": meta.get("session") or full_session_name,
                             }
+                            if thumbnails:
+                                enriched_img["thumbnails"] = thumbnails
 
                             # 检查本地是否有缓存
                             local_path = os.path.join(IMAGES_DIR, local_filename)
