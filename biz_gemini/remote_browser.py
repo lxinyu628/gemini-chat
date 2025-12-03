@@ -225,7 +225,14 @@ class RemoteBrowserSession:
 
         # 检测是否已登录到主页
         if self._is_main_page(url):
-            await self._handle_login_success()
+            # 如果已经登录成功但凭证不完整，检查新 URL 是否包含 group_id
+            if self.status == BrowserSessionStatus.LOGIN_SUCCESS and self._login_config is None:
+                # 凭证不完整，检查新 URL 是否有 group_id
+                if "/cid/" in url:
+                    logger.info(f"检测到包含 group_id 的 URL: {url}")
+                    await self._handle_login_success()
+            elif self.status == BrowserSessionStatus.RUNNING:
+                await self._handle_login_success()
 
     def _is_main_page(self, url: str) -> bool:
         """判断是否已到达主页面（登录成功）"""
@@ -271,6 +278,44 @@ class RemoteBrowserSession:
                 for sep in ("/", "?", "#"):
                     after = after.split(sep, 1)[0]
                 group_id = after
+
+            # 如果 URL 中没有 group_id，尝试从页面中获取或等待重定向
+            if not group_id:
+                logger.info("URL 中没有 group_id，尝试从页面获取...")
+                self.message = "正在获取 group_id..."
+                await self._notify_status()
+
+                # 方法1: 尝试从页面的 JavaScript 变量或 DOM 中获取 group_id
+                try:
+                    # 等待页面完全加载
+                    await asyncio.sleep(2)
+
+                    # 尝试从 URL 中的重定向获取（有时页面会自动重定向到包含 cid 的 URL）
+                    current_url = self._page.url
+                    if "/cid/" in current_url:
+                        after = current_url.split("/cid/", 1)[1]
+                        for sep in ("/", "?", "#"):
+                            after = after.split(sep, 1)[0]
+                        group_id = after
+                        logger.info(f"从重定向 URL 获取到 group_id: {group_id}")
+                except Exception as e:
+                    logger.warning(f"从页面获取 group_id 失败: {e}")
+
+                # 方法2: 如果还是没有 group_id，尝试点击页面上的链接或等待用户操作
+                if not group_id:
+                    # 尝试从页面中查找包含 /cid/ 的链接
+                    try:
+                        links = await self._page.query_selector_all('a[href*="/cid/"]')
+                        if links:
+                            href = await links[0].get_attribute('href')
+                            if href and "/cid/" in href:
+                                after = href.split("/cid/", 1)[1]
+                                for sep in ("/", "?", "#"):
+                                    after = after.split(sep, 1)[0]
+                                group_id = after
+                                logger.info(f"从页面链接获取到 group_id: {group_id}")
+                    except Exception as e:
+                        logger.warning(f"从页面链接获取 group_id 失败: {e}")
 
             # 获取 cookies - 收集 auth.business.gemini.google 和 business.gemini.google 域的全部 cookie
             cookies = await self._context.cookies()
@@ -335,7 +380,30 @@ class RemoteBrowserSession:
                     "config": self._login_config,
                 })
             else:
-                self.message = f"登录成功但凭证不完整: csesidx={csesidx}, group_id={group_id}, cookie={'有' if secure_c_ses else '无'}"
+                # 凭证不完整，提供详细提示
+                missing = []
+                if not csesidx:
+                    missing.append("csesidx")
+                if not group_id:
+                    missing.append("group_id")
+                if not secure_c_ses:
+                    missing.append("cookie")
+
+                if not group_id and csesidx and secure_c_ses:
+                    # 只缺少 group_id，提示用户点击进入对话页面
+                    # 保持 RUNNING 状态，继续监听 URL 变化
+                    self.status = BrowserSessionStatus.RUNNING
+                    self.message = "登录成功，但需要获取 group_id。请在浏览器中点击任意对话或创建新对话"
+                    logger.info(f"等待用户操作以获取 group_id，当前 URL: {self._page.url}")
+
+                    # 广播提示消息
+                    await self._broadcast({
+                        "type": "status",
+                        "status": "waiting_group_id",
+                        "message": self.message,
+                    })
+                else:
+                    self.message = f"登录成功但凭证不完整，缺少: {', '.join(missing)}"
                 await self._notify_status()
 
         except Exception as e:

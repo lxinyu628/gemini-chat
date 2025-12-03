@@ -5,8 +5,8 @@ gunicorn
 python-multipart
 
 # HTTP 客户端
-requests
-httpx
+requests[socks]
+httpx[socks]
 
 # 浏览器自动化（用于登录）
 playwright

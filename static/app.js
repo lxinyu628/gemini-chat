@@ -15,7 +15,7 @@ const state = {
 // ==================== Lucide 图标自动渲染 ====================
 
 // 使用 MutationObserver 监听 DOM 变化，自动渲染新添加的 Lucide 图标
-(function initLucideObserver() {
+(function initLucideObserver () {
   if (typeof lucide === 'undefined') return;
 
   // 防抖：避免频繁调用
@@ -76,7 +76,7 @@ const ToastIcons = {
  * @param {number} options.duration - 显示时长(ms)，默认 4000，设为 0 则不自动关闭
  * @param {boolean} options.closable - 是否可手动关闭，默认 true
  */
-function showToast(options) {
+function showToast (options) {
   const {
     type = 'info',
     title = '',
@@ -125,7 +125,7 @@ function showToast(options) {
   return toast;
 }
 
-function removeToast(toast) {
+function removeToast (toast) {
   if (!toast || !toast.parentNode) return;
 
   toast.classList.add('toast-hiding');
@@ -137,7 +137,7 @@ function removeToast(toast) {
 }
 
 // 便捷方法
-function toast(message, type = 'info') {
+function toast (message, type = 'info') {
   const titles = {
     success: '成功',
     error: '错误',
@@ -355,7 +355,7 @@ if (typeof marked !== 'undefined') {
 }
 
 // 渲染 Markdown 内容
-function renderMarkdown(content) {
+function renderMarkdown (content) {
   if (typeof marked === 'undefined') {
     // 如果 marked 未加载，返回转义后的 HTML
     return escapeHtml(content).replace(/\n/g, '<br>');
@@ -369,7 +369,7 @@ function renderMarkdown(content) {
 }
 
 // 为代码块添加复制按钮
-function addCodeCopyButtons(container) {
+function addCodeCopyButtons (container) {
   const codeBlocks = container.querySelectorAll('pre');
   codeBlocks.forEach(pre => {
     // 创建复制按钮
@@ -457,17 +457,17 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // 主题切换
-function initTheme() {
+function initTheme () {
   document.documentElement.setAttribute('data-theme', state.theme);
 }
 
-function toggleTheme() {
+function toggleTheme () {
   state.theme = state.theme === 'light' ? 'dark' : 'light';
   localStorage.setItem('theme', state.theme);
   document.documentElement.setAttribute('data-theme', state.theme);
 }
 
-function handleResponsiveSidebar() {
+function handleResponsiveSidebar () {
   const isMobile = window.innerWidth <= 1024;
   if (isMobile) {
     document.body.classList.remove('sidebar-open');
@@ -479,7 +479,7 @@ function handleResponsiveSidebar() {
 }
 
 // 事件监听
-function initEventListeners() {
+function initEventListeners () {
   elements.themeToggle.addEventListener('click', toggleTheme);
   elements.sidebarToggle.addEventListener('click', toggleSidebar);
   if (elements.sidebarBackdrop) {
@@ -505,7 +505,7 @@ function initEventListeners() {
   const maxLines = 5;
   const maxHeight = lineHeight * maxLines; // 5行高度 = 120px
 
-  function autoResize() {
+  function autoResize () {
     // 先重置高度以获取正确的 scrollHeight
     messageInput.style.height = 'auto';
     const scrollHeight = messageInput.scrollHeight - 28; // 减去 padding
@@ -545,7 +545,7 @@ function initEventListeners() {
   autoResize();
 }
 
-function toggleSidebar() {
+function toggleSidebar () {
   const isMobile = window.innerWidth <= 1024;
   if (isMobile) {
     document.body.classList.toggle('sidebar-open');
@@ -554,19 +554,19 @@ function toggleSidebar() {
   }
 }
 
-function closeSidebarOnMobile() {
+function closeSidebarOnMobile () {
   if (window.innerWidth <= 1024) {
     document.body.classList.remove('sidebar-open');
   }
 }
 
-function updateSendButton() {
+function updateSendButton () {
   const hasText = elements.messageInput.value.trim().length > 0;
   elements.sendBtn.disabled = !hasText;
 }
 
 // 状态检查
-async function checkStatus() {
+async function checkStatus () {
   try {
     const response = await fetch('/api/status');
     const data = await response.json();
@@ -581,12 +581,11 @@ async function checkStatus() {
     state.currentUsername = data.username || null;
     state.accountChooserUrl = data.account_chooser_url || state.accountChooserUrl;
 
-    // 仅在 expired 或 logged_in=false 时弹过期模态框
-    // warning=true 时只提示状态异常，不弹模态
+    // 仅在 expired 或 logged_in=false 时显示过期状态
+    // 不再自动弹出模态框，改为显示"点此登录"链接，由用户自行触发
     if (data.expired || data.logged_in === false) {
       elements.statusIndicator.classList.add('error');
-      statusText.textContent = '登录已过期';
-      showExpiredModal();
+      statusText.innerHTML = '登录已过期，<a href="javascript:void(0)" class="login-link" onclick="openLoginModal()">点此登录</a>';
     } else if (data.warning) {
       // warning 状态：可能 Cookie 校验失败但可继续使用
       elements.statusIndicator.classList.add('warning');
@@ -605,21 +604,21 @@ async function checkStatus() {
       }
     } else {
       elements.statusIndicator.classList.add('error');
-      statusText.textContent = '未登录';
+      statusText.innerHTML = '未登录，<a href="javascript:void(0)" class="login-link" onclick="openLoginModal()">点此登录</a>';
     }
   } catch (error) {
     console.error('状态检查失败:', error);
     elements.statusIndicator.classList.add('error');
-    elements.statusIndicator.querySelector('.status-text').textContent = '检查失败';
+    elements.statusIndicator.querySelector('.status-text').innerHTML = '检查失败，<a href="javascript:void(0)" class="login-link" onclick="openLoginModal()">点此登录</a>';
   }
 }
 
-function startStatusMonitoring() {
+function startStatusMonitoring () {
   // 每分钟检查一次状态
   state.statusCheckInterval = setInterval(checkStatus, 60000);
 }
 
-async function loadVersionInfo() {
+async function loadVersionInfo () {
   try {
     const response = await fetch('/api/version');
     const data = await response.json();
@@ -631,14 +630,13 @@ async function loadVersionInfo() {
   }
 }
 
-function showExpiredModal() {
+function showExpiredModal () {
   elements.expiredModal.classList.add('show');
-   openLoginModal();
-   autoStartBrowserLogin();
+  // 不再自动打开登录模态框和启动浏览器，由用户点击触发
 }
 
 // 模型加载
-async function loadModels() {
+async function loadModels () {
   try {
     // 从 /v1/models 接口获取模型列表
     const response = await fetch('/v1/models');
@@ -668,7 +666,7 @@ async function loadModels() {
 }
 
 // 更新模型显示名称
-function updateModelDisplay() {
+function updateModelDisplay () {
   const model = modelsList.find(m => m.id === state.currentModel);
   if (model) {
     elements.modelName.textContent = model.name;
@@ -678,7 +676,7 @@ function updateModelDisplay() {
 // 模型下拉浮窗
 let modelDropdown = null;
 
-function toggleModelDropdown() {
+function toggleModelDropdown () {
   if (modelDropdown) {
     closeModelDropdown();
   } else {
@@ -686,7 +684,7 @@ function toggleModelDropdown() {
   }
 }
 
-function openModelDropdown() {
+function openModelDropdown () {
   if (modelDropdown) return;
 
   // 创建下拉浮窗
@@ -758,7 +756,7 @@ function openModelDropdown() {
   }, 0);
 }
 
-function closeModelDropdown() {
+function closeModelDropdown () {
   if (!modelDropdown) return;
 
   modelDropdown.classList.remove('show');
@@ -774,26 +772,45 @@ function closeModelDropdown() {
   document.removeEventListener('click', handleDropdownOutsideClick);
 }
 
-function handleDropdownOutsideClick(e) {
+function handleDropdownOutsideClick (e) {
   if (modelDropdown && !modelDropdown.contains(e.target) && !elements.modelSelector.contains(e.target)) {
     closeModelDropdown();
   }
 }
 
 // 会话管理
-async function loadConversations() {
+async function loadConversations () {
   try {
     const response = await fetch('/api/sessions');
+
+    // 检查响应状态
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const errorMsg = errorData.detail || `HTTP ${response.status}`;
+      console.error('加载会话失败:', errorMsg);
+
+      // 403 错误表示权限问题，显示提示
+      if (response.status === 403) {
+        toast.error(errorMsg, '权限错误');
+      }
+      // 其他错误静默处理，使用空列表
+      state.conversations = [];
+      renderConversations();
+      return;
+    }
+
     const sessions = await response.json();
 
     state.conversations = sessions;
     renderConversations();
   } catch (error) {
     console.error('加载会话失败:', error);
+    state.conversations = [];
+    renderConversations();
   }
 }
 
-function renderConversations() {
+function renderConversations () {
   elements.conversationsList.innerHTML = '';
 
   state.conversations.forEach(conv => {
@@ -831,7 +848,7 @@ function renderConversations() {
   });
 }
 
-async function createNewConversation() {
+async function createNewConversation () {
   try {
     const response = await fetch('/api/sessions', {
       method: 'POST',
@@ -854,7 +871,7 @@ async function createNewConversation() {
   }
 }
 
-async function loadConversation(sessionId, sessionName = null) {
+async function loadConversation (sessionId, sessionName = null) {
   try {
     state.currentConversationId = sessionId;
     state.currentSessionName = sessionName;  // 保存完整 session name
@@ -899,7 +916,7 @@ async function loadConversation(sessionId, sessionName = null) {
   }
 }
 
-async function deleteConversation(sessionId) {
+async function deleteConversation (sessionId) {
   const confirmed = await toast.confirm({
     title: '删除对话',
     message: '确定要删除这个对话吗？此操作无法撤销。',
@@ -938,13 +955,13 @@ async function deleteConversation(sessionId) {
 }
 
 // 文件上传
-function handleFileSelect(e) {
+function handleFileSelect (e) {
   const files = Array.from(e.target.files);
   state.uploadedFiles = files;
   renderFilePreview();
 }
 
-function renderFilePreview() {
+function renderFilePreview () {
   elements.filePreview.innerHTML = '';
 
   state.uploadedFiles.forEach((file, index) => {
@@ -970,7 +987,7 @@ function renderFilePreview() {
 }
 
 // 消息发送
-async function sendMessage() {
+async function sendMessage () {
   const message = elements.messageInput.value.trim();
   if (!message && state.uploadedFiles.length === 0) return;
   const hadUploads = state.uploadedFiles.length > 0;
@@ -1175,7 +1192,7 @@ async function sendMessage() {
 }
 
 // 创建思考链显示块
-function createThinkingBlock(thinking, isActive = false, thinkingDurationMs = null) {
+function createThinkingBlock (thinking, isActive = false, thinkingDurationMs = null) {
   const block = document.createElement('div');
   block.className = 'thinking-block';
 
@@ -1221,7 +1238,7 @@ function createThinkingBlock(thinking, isActive = false, thinkingDurationMs = nu
 }
 
 // 解析用户消息中的文件信息
-function parseUserMessageFileInfo(content) {
+function parseUserMessageFileInfo (content) {
   // 匹配格式: [已上传文件: xxx.png, yyy.pdf]\n消息内容
   const fileInfoRegex = /^\[已上传文件: ([^\]]+)\]\n?/;
   const match = content.match(fileInfoRegex);
@@ -1236,7 +1253,7 @@ function parseUserMessageFileInfo(content) {
 }
 
 // 消息显示
-function appendMessage(role, content, images = null, thinking = null, errorInfo = null, isSkipped = false, attachments = null, timestampIso = null, thinkingDurationMs = null) {
+function appendMessage (role, content, images = null, thinking = null, errorInfo = null, isSkipped = false, attachments = null, timestampIso = null, thinkingDurationMs = null) {
   const messageDiv = document.createElement('div');
   messageDiv.className = `message ${role}`;
 
@@ -1532,7 +1549,7 @@ function appendMessage(role, content, images = null, thinking = null, errorInfo 
   return messageDiv;
 }
 
-function renderImagesForMessage(messageDiv, images = []) {
+function renderImagesForMessage (messageDiv, images = []) {
   if (!messageDiv || !images || images.length === 0) return;
 
   const contentDiv = messageDiv.querySelector('.message-content');
@@ -1572,7 +1589,7 @@ function renderImagesForMessage(messageDiv, images = []) {
   });
 }
 
-function ensureAssistantActions(messageDiv, content) {
+function ensureAssistantActions (messageDiv, content) {
   if (!messageDiv || !content) return;
   if (messageDiv.querySelector('.message-actions')) return;
 
@@ -1629,7 +1646,7 @@ function ensureAssistantActions(messageDiv, content) {
   contentDiv.appendChild(actionsDiv);
 }
 
-function showTypingIndicator() {
+function showTypingIndicator () {
   const id = 'typing-' + Date.now();
   const messageDiv = document.createElement('div');
   messageDiv.className = 'message assistant';
@@ -1665,19 +1682,19 @@ function showTypingIndicator() {
   return id;
 }
 
-function removeTypingIndicator(id) {
+function removeTypingIndicator (id) {
   const element = document.getElementById(id);
   if (element) {
     element.remove();
   }
 }
 
-function scrollToBottom() {
+function scrollToBottom () {
   elements.chatContainer.scrollTop = elements.chatContainer.scrollHeight;
 }
 
 // 工具函数
-function formatTimestamp(ts) {
+function formatTimestamp (ts) {
   const d = ts ? new Date(ts) : new Date();
   if (Number.isNaN(d.getTime())) return '';
 
@@ -1691,7 +1708,7 @@ function formatTimestamp(ts) {
   return `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
 }
 
-function formatFileSize(bytes) {
+function formatFileSize (bytes) {
   if (!bytes || isNaN(bytes)) return '';
   const units = ['B', 'KB', 'MB', 'GB'];
   let size = bytes;
@@ -1704,13 +1721,13 @@ function formatFileSize(bytes) {
   return `${displaySize} ${units[unitIndex]}`;
 }
 
-function escapeHtml(text) {
+function escapeHtml (text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
 }
 
-function showError(message) {
+function showError (message) {
   appendMessage('assistant', `错误: ${message}`, null, null, null, false, null, new Date().toISOString());
 }
 
@@ -1720,30 +1737,29 @@ function showError(message) {
 const browserState = {
   ws: null,
   connected: false,
-  status: 'idle'
+  status: 'idle',
+  lastUrl: null  // 记录上次的 URL，用于比较避免重复更新 DOM
 };
 
-function autoStartBrowserLogin() {
+function autoStartBrowserLogin () {
   if (state.autoBrowserStarted || browserState.connected) return;
   state.autoBrowserStarted = true;
 
-  const continueTarget = state.accountChooserUrl
-    ? null
-    : 'https://business.gemini.google/home/';
-  const fallbackUrl = `https://auth.business.gemini.google/account-chooser?continueUrl=${encodeURIComponent(continueTarget || 'https://business.gemini.google/')}`;
-  const startUrl = state.accountChooserUrl || fallbackUrl;
+  // 优先使用后端返回的 accountChooserUrl（包含正确的 group_id 和 csesidx）
+  // 如果没有（首次登录），直接访问 business.gemini.google 让 Google 处理登录流程
+  const startUrl = state.accountChooserUrl || 'https://business.gemini.google/';
 
   startBrowser({ useProfile: true, startUrl, auto: true });
 }
 
 // 打开登录模态框
-function openLoginModal() {
+function openLoginModal () {
   document.getElementById('expiredModal').classList.remove('show');
   document.getElementById('loginModal').classList.add('show');
 }
 
 // 关闭登录模态框
-function closeLoginModal() {
+function closeLoginModal () {
   document.getElementById('loginModal').classList.remove('show');
   stopBrowser();
 }
@@ -1772,17 +1788,14 @@ document.getElementById('stopBrowserBtn').addEventListener('click', stopBrowser)
 // 手动保存配置
 document.getElementById('saveManualBtn').addEventListener('click', saveManualConfig);
 
-async function startBrowser(options = {}) {
+async function startBrowser (options = {}) {
   const { useProfile = false, auto = false } = options || {};
   let { startUrl = null } = options || {};
 
-  // 默认使用 account-chooser，并带上 continueUrl，避免直接落到 business.gemini.google 导致看不到登录页
+  // 优先使用后端返回的 accountChooserUrl（包含正确的 group_id 和 csesidx，用于 session 复用）
+  // 如果没有（首次登录），直接访问 business.gemini.google 让 Google 处理登录流程
   if (!startUrl) {
-    const continueTarget = state.accountChooserUrl
-      ? null
-      : 'https://business.gemini.google/home/';
-    const fallbackUrl = `https://auth.business.gemini.google/account-chooser?continueUrl=${encodeURIComponent(continueTarget || 'https://business.gemini.google/')}`;
-    startUrl = state.accountChooserUrl || fallbackUrl;
+    startUrl = state.accountChooserUrl || 'https://business.gemini.google/';
   }
 
   if (browserState.connected) return;
@@ -1828,6 +1841,14 @@ async function startBrowser(options = {}) {
       startBtn.disabled = false;
       stopBtn.style.display = 'none';
       inputBox.style.display = 'none';
+      // 清空 browserUrl 显示
+      const urlDiv = document.getElementById('browserUrl');
+      if (urlDiv) {
+        urlDiv.style.display = 'none';
+        urlDiv.textContent = '';
+      }
+      // 重置上次 URL 记录
+      browserState.lastUrl = null;
     };
 
     browserState.ws.onerror = (error) => {
@@ -1844,7 +1865,7 @@ async function startBrowser(options = {}) {
   }
 }
 
-function stopBrowser() {
+function stopBrowser () {
   if (browserState.ws) {
     browserState.ws.send(JSON.stringify({ action: 'stop' }));
     browserState.ws.close();
@@ -1853,7 +1874,7 @@ function stopBrowser() {
   state.autoBrowserStarted = false;
 }
 
-function handleBrowserMessage(data) {
+function handleBrowserMessage (data) {
   const statusDiv = document.getElementById('browserStatus');
   const containerDiv = document.getElementById('browserContainer');
   const screenImg = document.getElementById('browserScreen');
@@ -1882,6 +1903,14 @@ function handleBrowserMessage(data) {
           urlDiv.style.display = 'none';
           urlDiv.textContent = '';
         }
+      } else if (data.status === 'waiting_group_id') {
+        // 登录成功但缺少 group_id，提示用户操作
+        statusDiv.style.display = 'block';
+        statusDiv.innerHTML = `<p style="color: orange;">${data.message}</p>`;
+        // 保持浏览器容器显示，让用户可以继续操作
+        containerDiv.style.display = 'block';
+        stopBtn.style.display = 'inline-block';
+        inputBox.style.display = 'block';
       } else {
         statusDiv.innerHTML = `<p>${data.message}</p>`;
         if (urlDiv) {
@@ -1893,9 +1922,11 @@ function handleBrowserMessage(data) {
 
     case 'screenshot':
       screenImg.src = 'data:image/jpeg;base64,' + data.data;
-      if (data.url && urlDiv) {
-        urlDiv.style.display = 'block';
-        urlDiv.textContent = `当前页面: ${data.url}`;
+      // 只有当 URL 变化时才更新 DOM，避免重复操作造成性能消耗
+      if (data.url && urlDiv && data.url !== browserState.lastUrl) {
+        browserState.lastUrl = data.url;
+        urlDiv.style.display = 'flex';
+        urlDiv.innerHTML = `<i data-lucide="map-pin-check"></i><span>${data.url}</span>`;
       }
       break;
 
@@ -1919,7 +1950,7 @@ function handleBrowserMessage(data) {
   }
 }
 
-function saveAndClose() {
+function saveAndClose () {
   if (browserState.ws && browserState.connected) {
     browserState.ws.send(JSON.stringify({ action: 'save_config' }));
   }
@@ -1994,7 +2025,7 @@ document.getElementById('browserScreen').addEventListener('wheel', (e) => {
 });
 
 // 手动保存配置
-async function saveManualConfig() {
+async function saveManualConfig () {
   const config = {
     secure_c_ses: document.getElementById('manualSecureCses').value.trim(),
     group_id: document.getElementById('manualGroupId').value.trim(),
@@ -2039,7 +2070,7 @@ async function saveManualConfig() {
 }
 
 // 退出登录
-async function logout() {
+async function logout () {
   const confirmed = await toast.confirm({
     title: '退出登录',
     message: '确定要退出登录吗？退出后需要重新登录才能使用。',
@@ -2072,7 +2103,7 @@ async function logout() {
 }
 
 // 显示账号操作菜单
-function showAccountMenu() {
+function showAccountMenu () {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'confirm-overlay';

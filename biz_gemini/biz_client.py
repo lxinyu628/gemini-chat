@@ -287,8 +287,19 @@ class BizGeminiClient:
                 continue
 
             if resp.status_code != 200:
+                # 解析错误详情
+                error_detail = resp.text[:500]
+                error_msg = error_detail
+                error_status = ""
+                try:
+                    error_json = resp.json()
+                    error_msg = error_json.get("error", {}).get("message", error_detail)
+                    error_status = error_json.get("error", {}).get("status", "")
+                except Exception:
+                    pass
+
                 raise RuntimeError(
-                    f"创建会话失败: {resp.status_code} {resp.text[:200]}"
+                    f"创建会话失败: {resp.status_code} {error_status} - {error_msg}"
                 )
 
             data = resp.json()
@@ -342,7 +353,7 @@ class BizGeminiClient:
         page_size: int = 110,
         page_token: str = "",
         order_by: str = "update_time desc",
-        filter_str: str = "",
+        filter_str: str = 'display_name != "" AND (NOT labels:hidden-from-ui-history)',
     ) -> dict:
         """获取会话列表（对接 Google 官方接口）
 
@@ -384,8 +395,19 @@ class BizGeminiClient:
                 continue
 
             if resp.status_code != 200:
+                # 解析错误详情
+                error_detail = resp.text[:500]
+                error_msg = error_detail
+                error_status = ""
+                try:
+                    error_json = resp.json()
+                    error_msg = error_json.get("error", {}).get("message", error_detail)
+                    error_status = error_json.get("error", {}).get("status", "")
+                except Exception:
+                    pass
+
                 raise RuntimeError(
-                    f"获取会话列表失败: {resp.status_code} {resp.text[:200]}"
+                    f"获取会话列表失败: {resp.status_code} {error_status} - {error_msg}"
                 )
 
             data = resp.json()

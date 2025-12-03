@@ -1,246 +1,232 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gemini Chat</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="icon" href="/static/images/gmblue_favicon.svg" type="image/svg+xml" />
+    <!-- Highlight.js 代码高亮 -->
+    <link rel="stylesheet" href="/static/github-dark.min.css" />
+    <!-- lucide图标库 -->
+    <script src="/static/lucide.min.js"></script>
+  </head>
 
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Gemini Chat</title>
-  <link rel="stylesheet" href="/static/styles.css">
-  <link rel="icon" href="/static/images/gmblue_favicon.svg" type="image/svg+xml">
-  <!-- Highlight.js 代码高亮 -->
-  <link rel="stylesheet" href="/static/github-dark.min.css">
-  <!-- lucide图标库 -->
-  <script src="/static/lucide.min.js"></script>
-</head>
-
-<body>
-  <!-- 侧边栏 -->
-  <aside class="sidebar" id="sidebar">
-    <div class="sidebar-header">
-      <button class="new-chat-btn" id="newChatBtn">
-        <i data-lucide="square-pen"></i>
-        <span>新对话</span>
-      </button>
-    </div>
-
-    <div class="conversation-list-header">对话</div>
-
-    <div class="conversations-list" id="conversationsList">
-      <!-- 对话列表将动态加载 -->
-    </div>
-
-    <div class="sidebar-footer">
-      <div class="status-indicator" id="statusIndicator">
-        <div class="status-dot"></div>
-        <span class="status-text">检查中...</span>
-      </div>
-      <div class="version-info" id="versionInfo"></div>
-    </div>
-  </aside>
-  <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
-
-  <!-- 主内容区 -->
-  <main class="main-content">
-    <!-- 顶部栏 -->
-    <header class="top-bar">
-      <button class="sidebar-toggle" id="sidebarToggle">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <path d="M3 12h18M3 6h18M3 18h18" />
-        </svg>
-      </button>
-
-      <div class="top-bar-title">Gemini Chat</div>
-
-      <div class="top-bar-actions">
-        <button class="icon-btn theme-toggle" id="themeToggle" title="切换主题">
-          <svg class="sun-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-            stroke-width="2">
-            <circle cx="12" cy="12" r="5" />
-            <path
-              d="M12 1v2m0 18v2M4.22 4.22l1.42 1.42m12.72 12.72l1.42 1.42M1 12h2m18 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
-          </svg>
-          <svg class="moon-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-            stroke-width="2">
-            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-          </svg>
+  <body>
+    <!-- 侧边栏 -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <button class="new-chat-btn" id="newChatBtn">
+          <i data-lucide="square-pen"></i>
+          <span>新对话</span>
         </button>
       </div>
-    </header>
 
-    <!-- 聊天区域 -->
-    <div class="chat-container" id="chatContainer">
-      <div class="welcome-screen" id="welcomeScreen">
-        <div class="welcome-content">
-          <h1>你好，我是 Gemini</h1>
-          <p>有什么可以帮助你的吗？</p>
+      <div class="conversation-list-header">对话</div>
+
+      <div class="conversations-list" id="conversationsList">
+        <!-- 对话列表将动态加载 -->
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="status-indicator" id="statusIndicator">
+          <div class="status-dot"></div>
+          <span class="status-text">检查中...</span>
+        </div>
+        <div class="version-info" id="versionInfo"></div>
+      </div>
+    </aside>
+    <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+
+    <!-- 主内容区 -->
+    <main class="main-content">
+      <!-- 顶部栏 -->
+      <header class="top-bar">
+        <button class="sidebar-toggle" id="sidebarToggle">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M3 12h18M3 6h18M3 18h18" />
+          </svg>
+        </button>
+
+        <div class="top-bar-title">Gemini Chat</div>
+
+        <div class="top-bar-actions">
+          <button class="icon-btn theme-toggle" id="themeToggle" title="切换主题">
+            <svg class="sun-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="5" />
+              <path d="M12 1v2m0 18v2M4.22 4.22l1.42 1.42m12.72 12.72l1.42 1.42M1 12h2m18 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
+            </svg>
+            <svg class="moon-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+            </svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- 聊天区域 -->
+      <div class="chat-container" id="chatContainer">
+        <div class="welcome-screen" id="welcomeScreen">
+          <div class="welcome-content">
+            <h1>你好，我是 Gemini</h1>
+            <p>有什么可以帮助你的吗？</p>
+          </div>
+        </div>
+
+        <div class="messages-container" id="messagesContainer">
+          <!-- 消息将动态添加 -->
         </div>
       </div>
 
-      <div class="messages-container" id="messagesContainer">
-        <!-- 消息将动态添加 -->
-      </div>
-    </div>
+      <!-- 输入区域 -->
+      <div class="input-area">
+        <div class="input-container">
+          <div class="file-preview" id="filePreview"></div>
 
-    <!-- 输入区域 -->
-    <div class="input-area">
-      <div class="input-container">
-        <div class="file-preview" id="filePreview"></div>
+          <div class="input-wrapper">
+            <textarea id="messageInput" class="message-input" placeholder="询问任何问题" rows="1"></textarea>
 
-        <div class="input-wrapper">
-          <textarea id="messageInput" class="message-input" placeholder="询问任何问题" rows="1"></textarea>
+            <div class="input-toolbar">
+              <div class="toolbar-left">
+                <button class="icon-btn attach-btn" id="attachBtn" title="添加文件">
+                  <i data-lucide="badge-plus"></i>
+                </button>
+                <input type="file" id="fileInput" accept="image/*,.pdf,.txt,.doc,.docx" multiple hidden />
 
-          <div class="input-toolbar">
-            <div class="toolbar-left">
-              <button class="icon-btn attach-btn" id="attachBtn" title="添加文件">
-                <i data-lucide="badge-plus"></i>
-              </button>
-              <input type="file" id="fileInput" accept="image/*,.pdf,.txt,.doc,.docx" multiple hidden>
+                <div class="model-selector" id="modelSelector">
+                  <svg class="model-icon" width="20" height="20" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <mask id="mask_model_icon" style="mask-type: alpha" maskUnits="userSpaceOnUse" x="8" y="8" width="112" height="112">
+                      <path d="M63.892 8C62.08 38.04 38.04 62.08 8 63.892V64.108C38.04 65.92 62.08 89.96 63.892 120H64.108C65.92 89.96 89.96 65.92 120 64.108V63.892C89.96 62.08 65.92 38.04 64.108 8H63.892Z" fill="url(#paint_model_0)" />
+                    </mask>
+                    <g mask="url(#mask_model_icon)">
+                      <path d="M64 0C99.3216 0 128 28.6784 128 64C128 99.3216 99.3216 128 64 128C28.6784 128 0 99.3216 0 64C0 28.6784 28.6784 0 64 0Z" fill="url(#paint_model_1)" />
+                    </g>
+                    <defs>
+                      <linearGradient id="paint_model_0" x1="100.892" y1="30.04" x2="22.152" y2="96.848" gradientUnits="userSpaceOnUse">
+                        <stop stop-color="#217BFE" />
+                        <stop offset="0.14" stop-color="#1485FC" />
+                        <stop offset="0.27" stop-color="#078EFB" />
+                        <stop offset="0.52" stop-color="#548FFD" />
+                        <stop offset="0.78" stop-color="#A190FF" />
+                        <stop offset="0.89" stop-color="#AF94FE" />
+                        <stop offset="1" stop-color="#BD99FE" />
+                      </linearGradient>
+                      <linearGradient id="paint_model_1" x1="47.988" y1="82.52" x2="96.368" y2="32.456" gradientUnits="userSpaceOnUse">
+                        <stop stop-color="#217BFE" />
+                        <stop offset="0.14" stop-color="#1485FC" />
+                        <stop offset="0.27" stop-color="#078EFB" />
+                        <stop offset="0.52" stop-color="#548FFD" />
+                        <stop offset="0.78" stop-color="#A190FF" />
+                        <stop offset="0.89" stop-color="#AF94FE" />
+                        <stop offset="1" stop-color="#BD99FE" />
+                      </linearGradient>
+                    </defs>
+                  </svg>
+                  <span class="model-name" id="modelName">自动</span>
+                  <i data-lucide="chevron-down" class="model-chevron"></i>
+                </div>
+              </div>
 
-              <div class="model-selector" id="modelSelector">
-                <svg class="model-icon" width="20" height="20" viewBox="0 0 128 128" fill="none"
-                  xmlns="http://www.w3.org/2000/svg">
-                  <mask id="mask_model_icon" style="mask-type:alpha" maskUnits="userSpaceOnUse" x="8" y="8" width="112"
-                    height="112">
-                    <path
-                      d="M63.892 8C62.08 38.04 38.04 62.08 8 63.892V64.108C38.04 65.92 62.08 89.96 63.892 120H64.108C65.92 89.96 89.96 65.92 120 64.108V63.892C89.96 62.08 65.92 38.04 64.108 8H63.892Z"
-                      fill="url(#paint_model_0)" />
-                  </mask>
-                  <g mask="url(#mask_model_icon)">
-                    <path
-                      d="M64 0C99.3216 0 128 28.6784 128 64C128 99.3216 99.3216 128 64 128C28.6784 128 0 99.3216 0 64C0 28.6784 28.6784 0 64 0Z"
-                      fill="url(#paint_model_1)" />
-                  </g>
-                  <defs>
-                    <linearGradient id="paint_model_0" x1="100.892" y1="30.04" x2="22.152" y2="96.848"
-                      gradientUnits="userSpaceOnUse">
-                      <stop stop-color="#217BFE" />
-                      <stop offset="0.14" stop-color="#1485FC" />
-                      <stop offset="0.27" stop-color="#078EFB" />
-                      <stop offset="0.52" stop-color="#548FFD" />
-                      <stop offset="0.78" stop-color="#A190FF" />
-                      <stop offset="0.89" stop-color="#AF94FE" />
-                      <stop offset="1" stop-color="#BD99FE" />
-                    </linearGradient>
-                    <linearGradient id="paint_model_1" x1="47.988" y1="82.52" x2="96.368" y2="32.456"
-                      gradientUnits="userSpaceOnUse">
-                      <stop stop-color="#217BFE" />
-                      <stop offset="0.14" stop-color="#1485FC" />
-                      <stop offset="0.27" stop-color="#078EFB" />
-                      <stop offset="0.52" stop-color="#548FFD" />
-                      <stop offset="0.78" stop-color="#A190FF" />
-                      <stop offset="0.89" stop-color="#AF94FE" />
-                      <stop offset="1" stop-color="#BD99FE" />
-                    </linearGradient>
-                  </defs>
-                </svg>
-                <span class="model-name" id="modelName">自动</span>
-                <i data-lucide="chevron-down" class="model-chevron"></i>
+              <div class="toolbar-right">
+                <button class="icon-btn send-btn" id="sendBtn" disabled>
+                  <i data-lucide="send-horizontal"></i>
+                </button>
               </div>
             </div>
+          </div>
+          <div class="ai-disclaimer">生成式 AI 展示的信息（包括与人有关的信息）可能不够准确，请仔细核查回答内容。</div>
+        </div>
+      </div>
+    </main>
 
-            <div class="toolbar-right">
-              <button class="icon-btn send-btn" id="sendBtn" disabled>
-                <i data-lucide="send-horizontal"></i>
-              </button>
+    <!-- 过期提示模态框 -->
+    <div class="modal" id="expiredModal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>登录已过期</h2>
+        </div>
+        <div class="modal-body">
+          <p>你的登录凭证已过期，请重新登录。</p>
+          <p class="hint">点击下方按钮启动远程浏览器登录</p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" onclick="location.reload()">刷新页面</button>
+          <button class="btn btn-primary" onclick="openLoginModal()">远程登录</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 远程浏览器登录模态框 -->
+    <div class="modal" id="loginModal">
+      <div class="modal-content modal-large">
+        <div class="modal-header">
+          <h2>远程浏览器登录</h2>
+          <button class="modal-close" onclick="closeLoginModal()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="login-tabs">
+            <button class="tab-btn active" data-tab="browser">远程浏览器</button>
+            <button class="tab-btn" data-tab="manual">手动输入</button>
+          </div>
+
+          <!-- 远程浏览器标签页 -->
+          <div class="tab-content active" id="browserTab">
+            <div class="browser-status" id="browserStatus">
+              <p>点击下方按钮启动远程浏览器</p>
+            </div>
+            <div class="browser-url" id="browserUrl" style="display: none"></div>
+            <div class="browser-container" id="browserContainer" style="display: none">
+              <img id="browserScreen" class="browser-screen" alt="浏览器画面" />
+              <div class="browser-overlay" id="browserOverlay"></div>
+            </div>
+            <div class="browser-toolbar">
+              <button class="btn btn-primary" id="startBrowserBtn">启动浏览器</button>
+              <button class="btn btn-secondary" id="stopBrowserBtn" style="display: none">停止</button>
+              <input type="text" id="browserInput" class="browser-input" placeholder="输入文字后按 Enter..." style="display: none" />
             </div>
           </div>
-        </div>
-        <div class="ai-disclaimer">生成式 AI 展示的信息（包括与人有关的信息）可能不够准确，请仔细核查回答内容。</div>
-      </div>
-    </div>
-  </main>
 
-  <!-- 过期提示模态框 -->
-  <div class="modal" id="expiredModal">
-    <div class="modal-content">
-      <div class="modal-header">
-        <h2>登录已过期</h2>
-      </div>
-      <div class="modal-body">
-        <p>你的登录凭证已过期，请重新登录。</p>
-        <p class="hint">点击下方按钮启动远程浏览器登录</p>
-      </div>
-      <div class="modal-footer">
-        <button class="btn btn-secondary" onclick="location.reload()">刷新页面</button>
-        <button class="btn btn-primary" onclick="openLoginModal()">远程登录</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- 远程浏览器登录模态框 -->
-  <div class="modal" id="loginModal">
-    <div class="modal-content modal-large">
-      <div class="modal-header">
-        <h2>远程浏览器登录</h2>
-        <button class="modal-close" onclick="closeLoginModal()">&times;</button>
-      </div>
-      <div class="modal-body">
-        <div class="login-tabs">
-          <button class="tab-btn active" data-tab="browser">远程浏览器</button>
-          <button class="tab-btn" data-tab="manual">手动输入</button>
-        </div>
-
-        <!-- 远程浏览器标签页 -->
-        <div class="tab-content active" id="browserTab">
-          <div class="browser-status" id="browserStatus">
-            <p>点击下方按钮启动远程浏览器</p>
-          </div>
-          <div class="browser-container" id="browserContainer" style="display: none;">
-            <img id="browserScreen" class="browser-screen" alt="浏览器画面">
-            <div class="browser-overlay" id="browserOverlay"></div>
-          </div>
-          <div class="browser-url" id="browserUrl" style="display: none;"></div>
-          <div class="browser-toolbar">
-            <button class="btn btn-primary" id="startBrowserBtn">启动浏览器</button>
-            <button class="btn btn-secondary" id="stopBrowserBtn" style="display: none;">停止</button>
-            <input type="text" id="browserInput" class="browser-input" placeholder="输入文字后按 Enter..."
-              style="display: none;">
-          </div>
-        </div>
-
-        <!-- 手动输入标签页 -->
-        <div class="tab-content" id="manualTab">
-          <p class="hint">从浏览器开发者工具的 Cookie 和 Network 中获取以下信息：</p>
-          <div class="form-group">
-            <label>__Secure-C_SES <span class="required">*</span></label>
-            <textarea id="manualSecureCses" rows="2" placeholder="从 Cookie 中复制 __Secure-C_SES 的值"></textarea>
-          </div>
-          <div class="form-group">
-            <label>group_id <span class="required">*</span></label>
-            <input type="text" id="manualGroupId" placeholder="从 URL 中获取，格式如: 51518926-c5e4-4372-b9c1-b4e6f2afa7ed">
-            <span class="hint">URL 格式: https://business.gemini.google/home/cid/<b>group_id</b>/...</span>
-          </div>
-          <div class="form-group">
-            <label>__Host-C_OSES（可选）</label>
-            <input type="text" id="manualHostCoses" placeholder="从 Cookie 中复制 __Host-C_OSES 的值">
-          </div>
-          <div class="form-group">
-            <label>NID（可选，推荐填写）</label>
-            <input type="text" id="manualNid" placeholder="从 Cookie 中复制 NID 的值">
-          </div>
-          <details class="advanced-options">
-            <summary>高级选项</summary>
+          <!-- 手动输入标签页 -->
+          <div class="tab-content" id="manualTab">
+            <p class="hint">从浏览器开发者工具的 Cookie 和 Network 中获取以下信息：</p>
             <div class="form-group">
-              <label>csesidx（可选，通常自动获取）</label>
-              <input type="text" id="manualCsesidx" placeholder="留空将自动从 API 获取">
+              <label>__Secure-C_SES <span class="required">*</span></label>
+              <textarea id="manualSecureCses" rows="2" placeholder="从 Cookie 中复制 __Secure-C_SES 的值"></textarea>
             </div>
-          </details>
-          <button class="btn btn-primary" id="saveManualBtn">保存配置</button>
+            <div class="form-group">
+              <label>group_id <span class="required">*</span></label>
+              <input type="text" id="manualGroupId" placeholder="从 URL 中获取，格式如: 51518926-c5e4-4372-b9c1-b4e6f2afa7ed" />
+              <span class="hint">URL 格式: https://business.gemini.google/home/cid/<b>group_id</b>/...</span>
+            </div>
+            <div class="form-group">
+              <label>__Host-C_OSES（可选）</label>
+              <input type="text" id="manualHostCoses" placeholder="从 Cookie 中复制 __Host-C_OSES 的值" />
+            </div>
+            <div class="form-group">
+              <label>NID（可选，推荐填写）</label>
+              <input type="text" id="manualNid" placeholder="从 Cookie 中复制 NID 的值" />
+            </div>
+            <details class="advanced-options">
+              <summary>高级选项</summary>
+              <div class="form-group">
+                <label>csesidx（可选，通常自动获取）</label>
+                <input type="text" id="manualCsesidx" placeholder="留空将自动从 API 获取" />
+              </div>
+            </details>
+            <button class="btn btn-primary" id="saveManualBtn">保存配置</button>
+          </div>
         </div>
       </div>
     </div>
-  </div>
 
-  <!-- Toast 通知容器 -->
-  <div class="toast-container" id="toastContainer"></div>
+    <!-- Toast 通知容器 -->
+    <div class="toast-container" id="toastContainer"></div>
 
-  <!-- Markdown 和代码高亮库 -->
-  <script src="/static/marked.min.js"></script>
-  <script src="/static/highlight.min.js"></script>
-  <script src="/static/app.js"></script>
-  <script>
-    lucide.createIcons();
-  </script>
-</body>
-
+    <!-- Markdown 和代码高亮库 -->
+    <script src="/static/marked.min.js"></script>
+    <script src="/static/highlight.min.js"></script>
+    <script src="/static/app.js"></script>
+    <script>
+      lucide.createIcons();
+    </script>
+  </body>
 </html>

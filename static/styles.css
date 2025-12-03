@@ -227,6 +227,17 @@ body {
   color: var(--text-secondary);
 }
 
+/* 状态文字中的登录链接 */
+.status-text .login-link {
+  color: var(--accent-color);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.status-text .login-link:hover {
+  text-decoration: underline;
+}
+
 .status-dot {
   width: 8px;
   height: 8px;
@@ -1282,10 +1293,23 @@ body {
 }
 
 .browser-url {
-  margin-top: 8px;
-  font-size: 13px;
+  margin: 0.5rem 0;
+  font-size: 14px;
   color: var(--text-muted);
   word-break: break-all;
+  border-radius: 60px;
+  border: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+}
+
+.browser-url svg {
+  width: 20px;
+  height: 20px;
+  color: #34a853;
+  flex-shrink: 0;
 }
 
 .browser-screen {

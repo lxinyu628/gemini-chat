@@ -126,19 +126,30 @@ def _check_primary_worker() -> bool:
 
 
 def _build_account_chooser_url(config: dict) -> Optional[str]:
-    """构造 account-chooser URL，优先带上 group_id/csesidx，便于远程浏览器跳转到正确账号。"""
+    """构造 account-chooser URL，用于已有 session 需要复用的场景。
+
+    注意：account-chooser 仅用于已有登录记录需要复用 session 的情况。
+    首次登录应该直接访问 https://business.gemini.google/
+
+    官网的 URL 格式：
+    https://auth.business.gemini.google/account-chooser?autoSelectSession=false&continueUrl=
+    https://business.gemini.google/home/cid/{group_id}?mods=&e=&project={project_id}&refCid={group_id}&csesidx={csesidx}
+    """
     try:
         group_id = config.get("group_id")
         csesidx = config.get("csesidx")
 
-        base_continue = "https://business.gemini.google/home/"
-        if group_id:
-            base_continue = f"https://business.gemini.google/home/cid/{group_id}/"
-        if csesidx:
-            sep = "?" if "?" not in base_continue else "&"
-            base_continue = f"{base_continue}{sep}csesidx={csesidx}"
+        # 只有同时有 group_id 和 csesidx 时才构造 account-chooser URL
+        # 否则应该让用户直接访问 business.gemini.google 进行首次登录
+        if not group_id or not csesidx:
+            return None
 
-        return f"https://auth.business.gemini.google/account-chooser?continueUrl={quote_plus(base_continue)}"
+        # 构造 continueUrl，与官网格式一致
+        # 完整格式：包含 mods, e, refCid, csesidx 参数
+        base_continue = f"https://business.gemini.google/home/cid/{group_id}?mods=&e=&refCid={group_id}&csesidx={csesidx}"
+
+        # 添加 autoSelectSession=false 参数，与官网一致
+        return f"https://auth.business.gemini.google/account-chooser?autoSelectSession=false&continueUrl={quote_plus(base_continue)}"
     except Exception:
         return None
 
@@ -826,6 +837,24 @@ async def list_sessions() -> list:
 
         return result
 
+    except RuntimeError as e:
+        error_msg = str(e)
+        # 检查是否是权限错误（403）- 这种情况需要告知前端
+        if "403" in error_msg or "PERMISSION_DENIED" in error_msg:
+            logger.error(f"获取会话列表权限错误: {error_msg}")
+            raise HTTPException(status_code=403, detail=f"权限不足，请检查 group_id 配置是否正确: {error_msg}")
+        # 其他错误返回本地缓存
+        logger.warning(f"获取会话列表失败，返回本地缓存: {e}")
+        result = []
+        for sid, data in sessions.items():
+            result.append({
+                "session_id": sid,
+                "title": data.get("title", "新对话"),
+                "created_at": data.get("created_at", 0),
+                "message_count": len(data.get("messages", [])),
+            })
+        result.sort(key=lambda x: x["created_at"], reverse=True)
+        return result
     except Exception as e:
         # 出错时返回本地缓存
         logger.warning(f"获取会话列表失败，返回本地缓存: {e}")
@@ -1298,7 +1327,20 @@ async def chat_completions(
 
     # 会话 ID 优先级: X-Session-Id header > Conversation-Id header > body.session_id > 新建
     session_id = x_session_id or conversation_id or request.session_id or str(uuid.uuid4())
-    client, session_data, canonical_session_id = get_or_create_client(session_id, request.session_name)
+    try:
+        client, session_data, canonical_session_id = get_or_create_client(session_id, request.session_name)
+    except RuntimeError as e:
+        error_msg = str(e)
+        # 检查是否是权限错误（403）
+        if "403" in error_msg or "PERMISSION_DENIED" in error_msg:
+            raise HTTPException(status_code=403, detail=f"权限不足，请检查 group_id 配置是否正确: {error_msg}")
+        # 检查是否是认证错误
+        if "401" in error_msg or "过期" in error_msg or "cookie" in error_msg.lower():
+            raise HTTPException(status_code=401, detail=f"登录已过期，请重新登录: {error_msg}")
+        # 其他错误
+        raise HTTPException(status_code=500, detail=f"创建会话失败: {error_msg}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"创建会话失败: {str(e)}")
 
     # 获取待发送的文件 ID
     pending_file_ids = session_data.get("pending_file_ids", [])
