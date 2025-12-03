@@ -958,7 +958,7 @@ async def delete_session(session_id: str) -> dict:
 
 @app.get("/api/sessions/{session_id}/messages")
 async def get_session_messages(session_id: str, session_name: Optional[str] = None) -> dict:
-    """获取会话消息历史 - 优先本地存储，其次调用 Google API"""
+    """获取会话消息历史 - 始终从 Google API 拉取，避免本地缓存丢失信息"""
     def _parse_dt(ts: Optional[str]) -> Optional[datetime]:
         if not ts:
             return None
@@ -973,13 +973,7 @@ async def get_session_messages(session_id: str, session_name: Optional[str] = No
             return ""
         return dt_obj.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
-    # 1. 优先从本地存储获取
-    if session_id in sessions:
-        local_messages = sessions[session_id].get("messages", [])
-        if local_messages:
-            return {"messages": local_messages}
-
-    # 2. 本地没有，尝试从 Google API 获取
+    # 仅依赖 Google 接口返回的消息（避免本地缓存造成信息缺失）
     try:
         config = load_config()
         missing = [k for k in ("secure_c_ses", "csesidx", "group_id") if not config.get(k)]
@@ -1414,22 +1408,17 @@ async def chat_completions(
     # 保存用户消息
     user_message = request.messages[-1] if request.messages else None
     if user_message:
-        user_msg_data = {
-            "role": user_message.role,
-            "content": user_message.content,
-            "timestamp": time.time(),
-        }
-        if attachment_metadata:
-            user_msg_data["attachments"] = attachment_metadata
-        session_data["messages"].append(user_msg_data)
-        # 更新会话标题（使用第一条消息）
-        if len(session_data["messages"]) == 1:
+        # 仅记录标题，不缓存整段消息，避免本地存储占用及信息不一致
+        if not session_data.get("title"):
             title = user_message.content[:30]
             if len(user_message.content) > 30:
                 title += "..."
             session_data["title"] = title
 
     messages = [{"role": m.role, "content": m.content} for m in request.messages]
+    full_session_name = session_data.get("session_name")
+    api_session_id = full_session_name.split("/")[-1] if full_session_name and "/" in full_session_name else canonical_session_id
+    encoded_session_name = quote_plus(full_session_name) if full_session_name else None
 
     if request.stream:
         async def generate():
@@ -1448,6 +1437,7 @@ async def chat_completions(
                     file_ids=file_ids_to_send,
                 )
                 full_content = ""
+                stream_start = time.time()
                 images_data = None
                 thoughts_data = []
                 for chunk in response:
@@ -1460,22 +1450,34 @@ async def chat_completions(
                         thoughts_data.append(delta_thought)
                     # 检查是否有图片数据
                     if "images" in chunk:
-                        images_data = chunk["images"]
+                        raw_images = chunk.get("images") or []
+                        enriched_images = []
+                        for img in raw_images:
+                            img_copy = dict(img)
+                            file_obj = img.get("file") or {}
+                            file_id = (
+                                img.get("file_id")
+                                or img.get("fileId")
+                                or file_obj.get("file_id")
+                                or file_obj.get("fileId")
+                            )
+                            if file_id:
+                                img_copy.setdefault("file_id", file_id)
+                            mime_type = img.get("mime_type") or img.get("mimeType") or file_obj.get("mimeType")
+                            if mime_type:
+                                img_copy.setdefault("mime_type", mime_type)
+                            if file_id and api_session_id:
+                                download_url = f"/api/sessions/{api_session_id}/images/{file_id}"
+                                if encoded_session_name:
+                                    download_url += f"?session_name={encoded_session_name}"
+                                img_copy.setdefault("download_uri", download_url)
+                                img_copy.setdefault("url", download_url)
+                            enriched_images.append(img_copy)
+                        chunk["images"] = enriched_images
+                        images_data = enriched_images
                     yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
                 yield "data: [DONE]\n\n"
 
-                # 保存助手回复
-                if full_content or images_data or thoughts_data:
-                    msg_data = {
-                        "role": "assistant",
-                        "content": full_content,
-                        "timestamp": time.time(),
-                    }
-                    if images_data:
-                        msg_data["images"] = images_data
-                    if thoughts_data:
-                        msg_data["thoughts"] = thoughts_data
-                    session_data["messages"].append(msg_data)
             except Exception as e:
                 error_data = {"error": {"message": str(e)}}
                 yield f"data: {json.dumps(error_data)}\n\n"
@@ -1513,17 +1515,6 @@ async def chat_completions(
             if "thoughts" in response:
                 logger.debug(f"Thoughts count: {len(response.get('thoughts', []))}")
 
-            # 保存助手回复
-            msg_data = {
-                "role": "assistant",
-                "content": content if isinstance(content, str) else json.dumps(content),
-                "timestamp": time.time(),
-            }
-            if "images" in response:
-                msg_data["images"] = response["images"]
-            if "thoughts" in response:
-                msg_data["thoughts"] = response["thoughts"]
-            session_data["messages"].append(msg_data)
             # 返回 canonical session_id 和 session_name，供前端更新状态
             response["session_id"] = canonical_session_id
             response["session_name"] = session_data.get("session_name")

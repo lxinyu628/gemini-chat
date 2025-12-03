@@ -1074,7 +1074,14 @@ async function sendMessage () {
   console.log('[DEBUG] 发送消息, session_id:', state.currentConversationId);
 
   // 显示加载指示器
+  const requestStartTime = Date.now();
   const loadingId = showTypingIndicator();
+  let typingIndicatorRemoved = false;
+  const removeTyping = () => {
+    if (typingIndicatorRemoved) return;
+    removeTypingIndicator(loadingId);
+    typingIndicatorRemoved = true;
+  };
 
   let assistantMsgDiv = null;
   let contentDiv = null;
@@ -1097,13 +1104,10 @@ async function sendMessage () {
     });
 
     if (!response.ok) {
-      removeTypingIndicator(loadingId);
+      removeTyping();
       const error = await response.json().catch(() => ({}));
       throw new Error(error.detail || error.message || '请求失败');
     }
-
-    // 移除加载提示，准备渲染流式内容
-    removeTypingIndicator(loadingId);
 
     // 延迟创建助手消息占位，等待有实际内容时再创建
     let textEl = null;
@@ -1116,7 +1120,7 @@ async function sendMessage () {
     let thinkingParts = [];
     let done = false;
 
-    let thinkingStartTime = null;
+    let thinkingStartTime = requestStartTime;
 
     const appendStreamChunk = (dataStr) => {
       if (dataStr === '[DONE]') {
@@ -1147,15 +1151,9 @@ async function sendMessage () {
 
       // 收集思考内容
       if (deltaThought) {
-        if (!thinkingStartTime) {
-          thinkingStartTime = Date.now();
-        }
         thinkingParts.push(deltaThought);
       }
       if (messageThoughts) {
-        if (!thinkingStartTime) {
-          thinkingStartTime = Date.now();
-        }
         if (Array.isArray(messageThoughts)) {
           thinkingParts.push(...messageThoughts);
         } else {
@@ -1164,8 +1162,9 @@ async function sendMessage () {
       }
 
       // 当有思考内容或正文内容时，确保消息气泡已创建
-      const hasNewContent = deltaContent || deltaThought || messageThoughts;
+      const hasNewContent = deltaContent || deltaThought || messageThoughts || (payload.images && payload.images.length > 0);
       if (hasNewContent && !assistantMsgDiv) {
+        removeTyping();
         // 首次收到内容，创建消息气泡
         assistantMsgDiv = appendMessage('assistant', '', null, null, null, false, null, new Date().toISOString());
         textEl = assistantMsgDiv.querySelector('.message-text');
@@ -1225,6 +1224,8 @@ async function sendMessage () {
       if (done) break;
     }
 
+    removeTyping();
+
     // 流结束后渲染最终 Markdown
     if (textEl) {
       textEl.innerHTML = renderMarkdown(fullText);
@@ -1237,7 +1238,7 @@ async function sendMessage () {
 
     const thinkingContent = thinkingParts.length > 0 ? thinkingParts.join('\n') : null;
     // 计算思考耗时
-    const thinkingDuration = thinkingStartTime ? Date.now() - thinkingStartTime : null;
+    const thinkingDuration = thinkingContent && thinkingStartTime ? Date.now() - thinkingStartTime : null;
 
     if (contentDiv && thinkingBlock) {
       if (thinkingContent) {
@@ -1264,7 +1265,7 @@ async function sendMessage () {
     // 更新会话列表
     await loadConversations();
   } catch (error) {
-    removeTypingIndicator(loadingId);
+    removeTyping();
     console.error('发送消息失败:', error);
 
     if (contentDiv && thinkingBlock) {
@@ -1706,19 +1707,24 @@ function renderImagesForMessage (messageDiv, images = []) {
     imgWrapper.className = 'message-image';
 
     const imgElement = document.createElement('img');
-    if (img.local_path || img.file_name || img.file_id) {
-      // 优先通过后端代理访问本地缓存
-      const fileName = encodeURIComponent(img.file_name || img.file_id);
-      imgElement.src = `/api/images/${fileName}`;
+    const mime = img.mime_type || img.mimeType || 'image/png';
+    let src = null;
+    if (img.url) {
+      src = img.url;
     } else if (img.download_uri) {
-      imgElement.src = img.download_uri;
-    } else if (img.url) {
-      imgElement.src = img.url;
+      src = img.download_uri;
     } else if (img.data) {
-      imgElement.src = `data:image/png;base64,${img.data}`;
-    } else {
-      return;
+      src = `data:${mime};base64,${img.data}`;
+    } else if (img.local_path) {
+      const fileName = encodeURIComponent(img.file_name || img.file_id || img.local_path.split('/').pop());
+      src = `/api/images/${fileName}`;
+    } else if (img.file_name || img.file_id) {
+      const fileName = encodeURIComponent(img.file_name || img.file_id);
+      src = `/api/images/${fileName}`;
     }
+
+    if (!src) return;
+    imgElement.src = src;
 
     imgElement.alt = 'Generated image';
     imgWrapper.appendChild(imgElement);
