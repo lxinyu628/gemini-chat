@@ -695,8 +695,14 @@ class BizGeminiClient:
 
         result: dict = {}
         last_status: Optional[int] = None
+        tried: set = set()
 
-        for candidate in session_candidates:
+        def _fetch_with_name(candidate: str) -> None:
+            nonlocal last_status
+            if not candidate or candidate in tried:
+                return
+            tried.add(candidate)
+
             jwt = self.jwt_manager.get_jwt()
             body = {
                 "configId": self.group_id,
@@ -733,23 +739,42 @@ class BizGeminiClient:
             last_status = resp.status_code
             if resp.status_code != 200:
                 logger.debug(f"_get_session_file_metadata error (name={candidate}): {resp.status_code} {resp.text[:200]}")
-                continue
+                return
 
             data = resp.json()
             logger.debug(f"_get_session_file_metadata response (name={candidate}): {json.dumps(data, ensure_ascii=False)[:500]}")
 
             file_metadata_list = data.get("listSessionFileMetadataResponse", {}).get("fileMetadata", [])
-            if not file_metadata_list:
-                continue
-
             for fm in file_metadata_list:
                 fid = fm.get("fileId")
                 if fid:
                     result[fid] = fm
 
-            # 已拿到数据，直接返回
+        # 先尝试预构建的 candidates
+        for candidate in session_candidates:
+            _fetch_with_name(candidate)
             if result:
                 return result
+
+        # 如果还没有拿到，尝试通过 list_sessions 找到带 project_id 的完整路径
+        if not result:
+            try:
+                session_id_only = session_name.split("/")[-1] if session_name else ""
+                sessions_data = self.list_sessions(page_size=200, filter_str="")
+                sessions_list = sessions_data.get("listSessionsResponse", {}).get("sessions", [])
+                extra_candidates: List[str] = []
+                for sess in sessions_list:
+                    name = sess.get("name") or ""
+                    if not name:
+                        continue
+                    if session_id_only and name.endswith(session_id_only):
+                        extra_candidates.append(name)
+                for candidate in extra_candidates:
+                    _fetch_with_name(candidate)
+                    if result:
+                        return result
+            except Exception as e:
+                logger.debug(f"_get_session_file_metadata list_sessions fallback error: {e}")
 
         if result:
             return result
