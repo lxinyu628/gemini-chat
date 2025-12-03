@@ -1148,8 +1148,8 @@ async function sendMessage () {
         console.log('[STREAM] chunk:', { deltaContent: deltaContent.slice(0, 50), deltaThought, messageThoughts, assistantMsgDiv: !!assistantMsgDiv });
       }
 
-     if (payload.final_metadata) {
-       finalMetadata = payload.final_metadata;
+      if (payload.final_metadata) {
+        finalMetadata = payload.final_metadata;
         if (assistantMsgDiv && finalMetadata.assistant_timestamp) {
           updateMessageTimestamp(assistantMsgDiv, finalMetadata.assistant_timestamp);
         }
@@ -1622,14 +1622,22 @@ function appendMessage (role, content, images = null, thinking = null, errorInfo
       imgWrapper.className = 'message-image';
 
       const imgElement = document.createElement('img');
-      imgElement.src = img.url || `data:image/png;base64,${img.data}`;
-      imgElement.alt = 'Generated image';
+      const mime = img.mime_type || img.mimeType || 'image/png';
+      const fileName = img.file_name || img.file_id || 'image.png';
+      imgElement.src = img.url || `data:${mime};base64,${img.data}`;
+      imgElement.alt = fileName;
+      // 存储图片元数据用于 Viewer.js 下载
+      imgElement.dataset.fileName = fileName;
+      imgElement.dataset.mimeType = mime;
+      imgElement.dataset.originalUrl = imgElement.src;
 
       imgWrapper.appendChild(imgElement);
       imagesDiv.appendChild(imgWrapper);
     });
 
     contentDiv.appendChild(imagesDiv);
+    // 初始化 Viewer.js
+    initImageViewer(imagesDiv);
   }
 
   // AI 回答添加操作按钮（复制、下载）
@@ -1718,11 +1726,25 @@ function renderImagesForMessage (messageDiv, images = []) {
   if (!contentDiv) return;
 
   let imagesDiv = messageDiv.querySelector('.message-images');
-  if (!imagesDiv) {
+  const isNewContainer = !imagesDiv;
+  if (isNewContainer) {
     imagesDiv = document.createElement('div');
     imagesDiv.className = 'message-images';
-    contentDiv.appendChild(imagesDiv);
+    // 找到正确的插入位置：在 message-bubble 之后，message-actions/message-timestamp 之前
+    const actionsDiv = contentDiv.querySelector('.message-actions');
+    const timestampDiv = contentDiv.querySelector('.message-timestamp');
+    const insertBefore = actionsDiv || timestampDiv;
+    if (insertBefore) {
+      contentDiv.insertBefore(imagesDiv, insertBefore);
+    } else {
+      contentDiv.appendChild(imagesDiv);
+    }
   } else {
+    // 销毁旧的 Viewer 实例
+    if (imagesDiv._viewer) {
+      imagesDiv._viewer.destroy();
+      imagesDiv._viewer = null;
+    }
     imagesDiv.innerHTML = '';
   }
 
@@ -1732,6 +1754,7 @@ function renderImagesForMessage (messageDiv, images = []) {
 
     const imgElement = document.createElement('img');
     const mime = img.mime_type || img.mimeType || 'image/png';
+    const fileName = img.file_name || img.file_id || 'image.png';
     let src = null;
     if (img.url) {
       src = img.url;
@@ -1740,20 +1763,98 @@ function renderImagesForMessage (messageDiv, images = []) {
     } else if (img.data) {
       src = `data:${mime};base64,${img.data}`;
     } else if (img.local_path) {
-      const fileName = encodeURIComponent(img.file_name || img.file_id || img.local_path.split('/').pop());
-      src = `/api/images/${fileName}`;
+      const encFileName = encodeURIComponent(img.file_name || img.file_id || img.local_path.split('/').pop());
+      src = `/api/images/${encFileName}`;
     } else if (img.file_name || img.file_id) {
-      const fileName = encodeURIComponent(img.file_name || img.file_id);
-      src = `/api/images/${fileName}`;
+      const encFileName = encodeURIComponent(img.file_name || img.file_id);
+      src = `/api/images/${encFileName}`;
     }
 
     if (!src) return;
     imgElement.src = src;
+    imgElement.alt = fileName;
+    // 存储图片元数据用于 Viewer.js 下载
+    imgElement.dataset.fileName = fileName;
+    imgElement.dataset.mimeType = mime;
+    imgElement.dataset.originalUrl = src;
 
-    imgElement.alt = 'Generated image';
     imgWrapper.appendChild(imgElement);
     imagesDiv.appendChild(imgWrapper);
   });
+
+  // 初始化 Viewer.js
+  initImageViewer(imagesDiv);
+}
+
+// 初始化图片查看器
+function initImageViewer (container) {
+  if (!container || typeof Viewer === 'undefined') return;
+
+  // 销毁旧实例
+  if (container._viewer) {
+    container._viewer.destroy();
+  }
+
+  const viewer = new Viewer(container, {
+    inline: false,
+    navbar: true,
+    title: (image) => image.alt || '图片',
+    toolbar: {
+      zoomIn: 1,
+      zoomOut: 1,
+      oneToOne: 1,
+      reset: 1,
+      prev: 1,
+      play: false,
+      next: 1,
+      rotateLeft: 1,
+      rotateRight: 1,
+      flipHorizontal: 1,
+      flipVertical: 1,
+      download: {
+        show: 1,
+        click: function () {
+          downloadViewerImage(viewer);
+        }
+      }
+    },
+    tooltip: true,
+    movable: true,
+    zoomable: true,
+    rotatable: true,
+    scalable: true,
+    transition: true,
+    fullscreen: true,
+    keyboard: true
+  });
+
+  container._viewer = viewer;
+}
+
+// 下载当前查看的图片
+async function downloadViewerImage (viewer) {
+  const image = viewer.image;
+  if (!image) return;
+
+  const src = image.src;
+  const fileName = image.dataset?.fileName || image.alt || 'image.png';
+
+  try {
+    const response = await fetch(src);
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    console.error('下载图片失败:', e);
+    // 回退方案：直接打开图片
+    window.open(src, '_blank');
+  }
 }
 
 function ensureAssistantActions (messageDiv, content) {

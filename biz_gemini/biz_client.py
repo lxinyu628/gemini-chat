@@ -661,18 +661,28 @@ class BizGeminiClient:
         """获取 session 中的文件元数据，包括下载链接
 
         Args:
-            session_name: 会话名称
+            session_name: 会话名称（支持完整路径或简短路径）
             file_ids: 可选的文件 ID 列表（目前未使用）
             filter_str: 过滤条件，默认获取所有文件。
                        可选值: "file_origin_type = AI_GENERATED" 只获取 AI 生成的文件
                               "file_origin_type = USER_UPLOADED" 只获取用户上传的文件
         """
+        # 标准化 session_name 格式
+        # API 期望格式: collections/default_collection/engines/agentspace-engine/sessions/xxx
+        # 但可能传入: projects/.../collections/default_collection/engines/agentspace-engine/sessions/xxx
+        normalized_session_name = session_name
+        if "collections/" in session_name:
+            # 提取从 collections/ 开始的部分
+            idx = session_name.find("collections/")
+            if idx > 0:
+                normalized_session_name = session_name[idx:]
+
         jwt = self.jwt_manager.get_jwt()
         body = {
             "configId": self.group_id,
             "additionalParams": {"token": "-"},
             "listSessionFileMetadataRequest": {
-                "name": session_name,
+                "name": normalized_session_name,
             }
         }
 
@@ -970,7 +980,10 @@ class BizGeminiClient:
         # 处理通过 fileId 引用的图片
         if file_ids and current_session and auto_save_images:
             try:
+                logger.debug(f"[chat_full] current_session={current_session}")
+                logger.debug(f"[chat_full] file_ids={file_ids}")
                 file_metadata = self._get_session_file_metadata(current_session)
+                logger.debug(f"[chat_full] file_metadata keys={list(file_metadata.keys())}")
                 if debug and file_metadata:
                     logger.debug("文件元数据:")
                     logger.debug(json.dumps(file_metadata, indent=2, ensure_ascii=False))
@@ -983,6 +996,9 @@ class BizGeminiClient:
                         img = ChatImage.from_file_metadata(meta)
                         # 获取正确的 session 路径用于构造下载 URL
                         session_path = meta.get("session") or current_session
+                        # 确保 session 属性被设置（元数据中可能没有 session 字段）
+                        if not img.session:
+                            img.session = session_path
                         try:
                             # 使用正确的 session_name 和 file_id 构造下载 URL
                             image_data = self._download_file_with_jwt(
@@ -1003,10 +1019,12 @@ class BizGeminiClient:
                                 logger.debug(f"下载图片失败: {e}")
                         result.images.append(img)
                     else:
-                        # 没有元数据时，使用基本信息创建
+                        # 没有元数据时，使用基本信息创建（包含 session 用于构造下载 URL）
                         img = ChatImage(
                             file_id=fid,
                             mime_type=finfo["mimeType"],
+                            session=current_session,
+                            file_name=f"gemini_{fid}.png",
                         )
                         result.images.append(img)
             except Exception as e:

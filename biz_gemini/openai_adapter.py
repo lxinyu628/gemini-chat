@@ -156,12 +156,17 @@ def _build_image_metadata(response: ChatResponse) -> Optional[List[Dict]]:
         return None
 
     import os
+    from urllib.parse import quote
 
     metadata = []
     for img in response.images:
+        # 生成默认文件名（如果没有）
+        default_file_name = f"gemini_{img.file_id}.png" if img.file_id else None
+        file_name = img.file_name or default_file_name
+
         meta = {
             "file_id": img.file_id,
-            "file_name": img.file_name,
+            "file_name": file_name,
             "mime_type": img.mime_type,
             "local_path": img.local_path,
             # 完整元数据字段
@@ -175,7 +180,7 @@ def _build_image_metadata(response: ChatResponse) -> Optional[List[Dict]]:
         }
 
         # 构造可访问的 URL
-        if img.local_path:
+        if img.local_path and os.path.exists(img.local_path):
             # 从本地路径提取文件名，构造 API URL
             filename = os.path.basename(img.local_path)
             meta["url"] = f"/api/images/{filename}"
@@ -184,7 +189,9 @@ def _build_image_metadata(response: ChatResponse) -> Optional[List[Dict]]:
         elif img.file_id and img.session:
             # 使用 session image 下载接口
             session_id = img.session.split("/")[-1] if "/" in img.session else img.session
-            meta["url"] = f"/api/sessions/{session_id}/images/{img.file_id}?session_name={img.session}"
+            # URL 编码 session_name 参数
+            encoded_session = quote(img.session, safe="")
+            meta["url"] = f"/api/sessions/{session_id}/images/{img.file_id}?session_name={encoded_session}"
 
         # 添加缩略图信息
         if img.thumbnails:

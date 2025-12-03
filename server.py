@@ -1236,6 +1236,9 @@ async def get_session_messages(session_id: str, session_name: Optional[str] = No
         if (all_file_ids or all_context_file_ids) and full_session_name:
             try:
                 file_metadata = biz_client._get_session_file_metadata(full_session_name)
+                logger.debug(f"[get_session_messages] full_session_name={full_session_name}")
+                logger.debug(f"[get_session_messages] all_file_ids={all_file_ids}")
+                logger.debug(f"[get_session_messages] file_metadata keys={list(file_metadata.keys())}")
 
                 # 从 full_session_name 提取 session_id 用于构造 URL
                 # 格式: projects/.../sessions/17970885850102128104
@@ -1252,11 +1255,14 @@ async def get_session_messages(session_id: str, session_name: Optional[str] = No
 
                             # 构建完整的图片信息
                             local_filename = meta.get("name") or img_info.get("fileName", "") or f"gemini_{file_id}.png"
+                            # byteSize 在 API 响应中是字符串，需要转换为整数
+                            byte_size_str = meta.get("byteSize")
+                            byte_size = int(byte_size_str) if byte_size_str else None
                             enriched_img = {
                                 "file_id": file_id,
                                 "file_name": local_filename,
                                 "mime_type": meta.get("mimeType") or img_info.get("mimeType", "image/png"),
-                                "byte_size": meta.get("byteSize"),
+                                "byte_size": byte_size,
                                 "session": meta.get("session") or full_session_name,
                             }
 
