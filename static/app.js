@@ -1076,6 +1076,12 @@ async function sendMessage () {
   // 显示加载指示器
   const loadingId = showTypingIndicator();
 
+  let assistantMsgDiv = null;
+  let contentDiv = null;
+  let thinkingBlock = null;
+  let thinkingTimer = null;
+  let thinkingStart = null;
+
   try {
     const response = await fetch('/v1/chat/completions', {
       method: 'POST',
@@ -1102,8 +1108,21 @@ async function sendMessage () {
     removeTypingIndicator(loadingId);
 
     // 预创建助手消息占位
-    const assistantMsgDiv = appendMessage('assistant', '', null, null, null, false, null, new Date().toISOString());
+    assistantMsgDiv = appendMessage('assistant', '', null, null, null, false, null, new Date().toISOString());
     const textEl = assistantMsgDiv.querySelector('.message-text');
+    contentDiv = assistantMsgDiv.querySelector('.message-content');
+
+    thinkingStart = Date.now();
+    if (contentDiv) {
+      thinkingBlock = createThinkingBlock('正在思考...', true, 0);
+      contentDiv.insertBefore(thinkingBlock, contentDiv.firstChild);
+      thinkingTimer = setInterval(() => {
+        updateThinkingBlock(thinkingBlock, { isActive: true, durationMs: Date.now() - thinkingStart });
+      }, 200);
+      if (typeof lucide !== 'undefined') {
+        lucide.createIcons({ nodes: [thinkingBlock] });
+      }
+    }
 
     const decoder = new TextDecoder();
     const reader = response.body.getReader();
@@ -1176,6 +1195,11 @@ async function sendMessage () {
       if (done) break;
     }
 
+    if (thinkingTimer) {
+      clearInterval(thinkingTimer);
+    }
+    const thinkingDurationMs = thinkingStart ? (Date.now() - thinkingStart) : 0;
+
     // 流结束后渲染最终 Markdown
     if (textEl) {
       textEl.innerHTML = renderMarkdown(fullText);
@@ -1187,23 +1211,41 @@ async function sendMessage () {
     }
 
     const thinkingContent = thinkingParts.length > 0 ? thinkingParts.join('\n') : null;
-    if (thinkingContent) {
-      const contentDiv = assistantMsgDiv.querySelector('.message-content');
-      if (contentDiv) {
-        const thinkingBlock = createThinkingBlock(thinkingContent, false);
-        contentDiv.insertBefore(thinkingBlock, contentDiv.firstChild);
+    if (contentDiv && thinkingBlock) {
+      if (thinkingContent) {
+        const newBlock = createThinkingBlock(thinkingContent, false, thinkingDurationMs);
+        thinkingBlock.replaceWith(newBlock);
+        thinkingBlock = newBlock;
+      } else {
+        updateThinkingBlock(thinkingBlock, {
+          thinkingText: '模型未返回思考链',
+          isActive: false,
+          durationMs: thinkingDurationMs
+        });
       }
     }
 
-    ensureAssistantActions(assistantMsgDiv, fullText);
+    if (assistantMsgDiv) {
+      ensureAssistantActions(assistantMsgDiv, fullText);
+    }
 
-    if (typeof lucide !== 'undefined') {
+    if (assistantMsgDiv && typeof lucide !== 'undefined') {
       lucide.createIcons({ nodes: [assistantMsgDiv] });
     }
 
     // 更新会话列表
     await loadConversations();
   } catch (error) {
+    if (thinkingTimer) {
+      clearInterval(thinkingTimer);
+    }
+    if (contentDiv && thinkingBlock) {
+      updateThinkingBlock(thinkingBlock, {
+        thinkingText: '请求失败，未生成思考链',
+        isActive: false,
+        durationMs: thinkingStart ? (Date.now() - thinkingStart) : 0
+      });
+    }
     removeTypingIndicator(loadingId);
     console.error('发送消息失败:', error);
 
@@ -1219,17 +1261,27 @@ async function sendMessage () {
 function createThinkingBlock (thinking, isActive = false, thinkingDurationMs = null) {
   const block = document.createElement('div');
   block.className = 'thinking-block';
+  block.dataset.durationMs = thinkingDurationMs != null ? thinkingDurationMs : '';
+  block.dataset.active = isActive ? '1' : '0';
 
   const header = document.createElement('div');
   header.className = 'thinking-header';
-  const durationText = thinkingDurationMs != null
-    ? ` · 已思考${(Math.max(0, thinkingDurationMs) / 1000).toFixed(2)}s`
-    : '';
-  header.innerHTML = `
-    <i data-lucide="sparkles" class="thinking-icon${isActive ? ' spinning' : ''}"></i>
-    <span class="thinking-title${isActive ? ' thinking-active' : ''}">${isActive ? '正在思考...' : '显示思考过程'}${durationText}</span>
-    <i data-lucide="chevron-down" class="thinking-chevron"></i>
-  `;
+
+  const icon = document.createElement('i');
+  icon.setAttribute('data-lucide', 'sparkles');
+  icon.className = `thinking-icon${isActive ? ' spinning' : ''}`;
+
+  const titleSpan = document.createElement('span');
+  titleSpan.className = `thinking-title${isActive ? ' thinking-active' : ''}`;
+  titleSpan.textContent = `${isActive ? '正在思考...' : '显示思考过程'}${formatThinkingDuration(thinkingDurationMs)}`;
+
+  const chevron = document.createElement('i');
+  chevron.setAttribute('data-lucide', 'chevron-down');
+  chevron.className = 'thinking-chevron';
+
+  header.appendChild(icon);
+  header.appendChild(titleSpan);
+  header.appendChild(chevron);
 
   const content = document.createElement('div');
   content.className = 'thinking-content';
@@ -1251,14 +1303,49 @@ function createThinkingBlock (thinking, isActive = false, thinkingDurationMs = n
   // 点击展开/收起，并切换标题文字
   header.addEventListener('click', () => {
     block.classList.toggle('expanded');
-    const titleSpan = header.querySelector('.thinking-title');
-    if (!isActive && titleSpan) {
+    const titleSpanEl = header.querySelector('.thinking-title');
+    const isActiveNow = block.dataset.active === '1';
+    if (!isActiveNow && titleSpanEl) {
       const base = block.classList.contains('expanded') ? '隐藏思考过程' : '显示思考过程';
-      titleSpan.textContent = `${base}${durationText}`;
+      const durationText = formatThinkingDuration(block.dataset.durationMs ? Number(block.dataset.durationMs) : null);
+      titleSpanEl.textContent = `${base}${durationText}`;
     }
   });
 
   return block;
+}
+
+function updateThinkingBlock (block, { thinkingText, isActive, durationMs }) {
+  if (!block) return;
+  const titleSpan = block.querySelector('.thinking-title');
+  const icon = block.querySelector('.thinking-icon');
+  const textDiv = block.querySelector('.thinking-text');
+
+  if (durationMs != null && !isNaN(durationMs)) {
+    block.dataset.durationMs = durationMs;
+  }
+
+  if (thinkingText !== undefined && textDiv) {
+    textDiv.innerHTML = renderMarkdown(thinkingText);
+  }
+
+  const durationText = formatThinkingDuration(block.dataset.durationMs ? Number(block.dataset.durationMs) : null);
+
+  if (isActive !== undefined) {
+    block.dataset.active = isActive ? '1' : '0';
+    if (titleSpan) {
+      const base = isActive ? '正在思考...' : (block.classList.contains('expanded') ? '隐藏思考过程' : '显示思考过程');
+      titleSpan.textContent = `${base}${durationText}`;
+      titleSpan.classList.toggle('thinking-active', isActive);
+    }
+    if (icon) {
+      icon.classList.toggle('spinning', isActive);
+    }
+  } else if (titleSpan) {
+    const base = block.classList.contains('expanded') ? '隐藏思考过程' : '显示思考过程';
+    titleSpan.textContent = `${base}${durationText}`;
+  }
+
 }
 
 // 解析用户消息中的文件信息
@@ -1743,6 +1830,13 @@ function formatFileSize (bytes) {
   }
   const displaySize = size % 1 === 0 ? size : size.toFixed(1);
   return `${displaySize} ${units[unitIndex]}`;
+}
+
+function formatThinkingDuration (ms) {
+  if (ms == null || isNaN(ms)) return '';
+  const seconds = Math.max(0, ms) / 1000;
+  const precision = seconds >= 10 ? 1 : 2;
+  return ` · 已思考${seconds.toFixed(precision)}s`;
 }
 
 function escapeHtml (text) {
