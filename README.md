@@ -105,12 +105,12 @@ python3 app.py login
 
 #### Windows
 
-```cmd
-manage.bat start          # 启动服务
-manage.bat status         # 查看状态
-manage.bat logs           # 查看日志
-manage.bat restart        # 重启服务
-manage.bat stop           # 停止服务
+```powershell
+./manage.bat start          # 启动服务
+./manage.bat status         # 查看状态
+./manage.bat logs           # 查看日志
+./manage.bat restart        # 重启服务
+./manage.bat stop           # 停止服务
 ```
 
 #### Linux/Mac

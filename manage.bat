@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 >NUL
 REM Business Gemini 服务管理脚本 (Windows)
 REM 支持: start, stop, restart, status, reload, logs
 
@@ -60,7 +61,7 @@ set "WORKERS=4"
 set "LOG_LEVEL=INFO"
 
 if exist "%CONFIG_FILE%" (
-    for /f "tokens=*" %%i in ('python -c "import json; cfg=json.load(open('%CONFIG_FILE%', encoding='utf-8')); srv=cfg.get('server', {}); print(f\"{srv.get('host', '0.0.0.0')}^|{srv.get('port', 8000)}^|{srv.get('workers', 4)}^|{srv.get('log_level', 'INFO')}\")" 2^>NUL') do (
+    for /f "tokens=*" %%i in ('python -c "import json; cfg=json.load(open(r'%CONFIG_FILE%', encoding='utf-8')); srv=cfg.get('server', {}); print(str(srv.get('host', '0.0.0.0'))+'|'+str(srv.get('port', 8000))+'|'+str(srv.get('workers', 4))+'|'+str(srv.get('log_level', 'INFO')))" 2^>NUL') do (
         for /f "tokens=1,2,3,4 delims=|" %%a in ("%%i") do (
             set "BIND_HOST=%%a"
             set "BIND_PORT=%%b"
@@ -92,20 +93,23 @@ cd /d "%PROJECT_DIR%"
 
 REM 启动服务（后台运行）
 echo [*] 启动服务...
-start /b python -m uvicorn server:app --host %BIND_HOST% --port %BIND_PORT% --log-level %LOG_LEVEL% > "%ACCESS_LOG%" 2> "%ERROR_LOG%"
+REM 将日志级别转换为小写
+set "LOG_LEVEL_LOWER="
+for /f "delims=" %%a in ('powershell -Command "('%LOG_LEVEL%').ToLower()"') do set "LOG_LEVEL_LOWER=%%a"
+if "%LOG_LEVEL_LOWER%"=="" set "LOG_LEVEL_LOWER=info"
+start /b python -m uvicorn server:app --host %BIND_HOST% --port %BIND_PORT% --log-level %LOG_LEVEL_LOWER% > "%ACCESS_LOG%" 2> "%ERROR_LOG%"
 
 REM 获取进程 ID
-timeout /t 2 /nobreak >NUL
-for /f "tokens=2" %%i in ('tasklist /FI "IMAGENAME eq python.exe" /FI "WINDOWTITLE eq *uvicorn*" /NH 2^>NUL ^| find "python.exe"') do (
-    echo %%i > "%PID_FILE%"
+timeout /t 3 /nobreak >NUL
+
+set "PID="
+REM 通过 netstat 查找监听端口的进程
+for /f "tokens=5" %%i in ('netstat -ano 2^>NUL ^| findstr ":%BIND_PORT% " ^| findstr "LISTENING"') do (
     set "PID=%%i"
-    goto :start_success
 )
 
-REM 如果没找到进程，尝试备用方法
-powershell -Command "$proc = Get-Process python -ErrorAction SilentlyContinue | Where-Object {$_.CommandLine -like '*uvicorn*'} | Select-Object -First 1; if ($proc) { $proc.Id | Out-File -FilePath '%PID_FILE%' -Encoding ascii }"
-if exist "%PID_FILE%" (
-    set /p PID=<"%PID_FILE%"
+if defined PID (
+    echo %PID%> "%PID_FILE%"
     goto :start_success
 )
 
@@ -120,21 +124,31 @@ exit /b 0
 :stop
 echo [*] 停止 Business Gemini 服务...
 
-if not exist "%PID_FILE%" (
-    echo [!] 服务未运行（无 PID 文件）
+set "FOUND_PID="
+
+REM 先尝试从 PID 文件读取
+if exist "%PID_FILE%" (
+    set /p FOUND_PID=<"%PID_FILE%"
+)
+
+REM 如果没有 PID 文件或为空，通过端口查找
+if not defined FOUND_PID (
+    for /f "tokens=5" %%i in ('netstat -ano 2^>NUL ^| findstr ":8000 " ^| findstr "LISTENING"') do (
+        set "FOUND_PID=%%i"
+    )
+)
+
+if not defined FOUND_PID (
+    echo [!] 服务未运行
     exit /b 1
 )
 
-set /p PID=<"%PID_FILE%"
-tasklist /FI "PID eq %PID%" 2>NUL | find /I /N "python">NUL
+echo [*] 正在停止进程 PID: %FOUND_PID%
+taskkill /PID %FOUND_PID% /F >NUL 2>&1
 if errorlevel 1 (
-    echo [!] 进程不存在 (PID: %PID%)
-    del /f /q "%PID_FILE%" 2>NUL
+    echo [!] 停止失败
     exit /b 1
 )
-
-echo [*] 正在停止进程 (PID: %PID%)...
-taskkill /PID %PID% /F >NUL 2>&1
 del /f /q "%PID_FILE%" 2>NUL
 echo [+] 服务已停止
 exit /b 0
@@ -163,7 +177,7 @@ REM 读取配置获取地址
 set "BIND_HOST=0.0.0.0"
 set "BIND_PORT=8000"
 if exist "%CONFIG_FILE%" (
-    for /f "tokens=*" %%i in ('python -c "import json; cfg=json.load(open('%CONFIG_FILE%', encoding='utf-8')); srv=cfg.get('server', {}); print(f\"{srv.get('host', '0.0.0.0')}^|{srv.get('port', 8000)}\")" 2^>NUL') do (
+    for /f "tokens=*" %%i in ('python -c "import json; cfg=json.load(open(r'%CONFIG_FILE%', encoding='utf-8')); srv=cfg.get('server', {}); print(str(srv.get('host', '0.0.0.0'))+'|'+str(srv.get('port', 8000)))" 2^>NUL') do (
         for /f "tokens=1,2 delims=|" %%a in ("%%i") do (
             set "BIND_HOST=%%a"
             set "BIND_PORT=%%b"
