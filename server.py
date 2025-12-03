@@ -1419,6 +1419,59 @@ async def chat_completions(
     full_session_name = session_data.get("session_name")
     api_session_id = full_session_name.split("/")[-1] if full_session_name and "/" in full_session_name else canonical_session_id
     encoded_session_name = quote_plus(full_session_name) if full_session_name else None
+    biz_client = session_data.get("biz_client")
+
+    def _parse_dt(ts: Optional[str]) -> Optional[datetime]:
+        if not ts:
+            return None
+        try:
+            return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    def _to_iso_z(dt_obj: Optional[datetime]) -> str:
+        if not dt_obj:
+            return ""
+        return dt_obj.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    def fetch_latest_turn_meta() -> Optional[dict]:
+        """从 Google 接口获取最新一条回复的时间和思考耗时"""
+        if not biz_client or not full_session_name:
+            return None
+        try:
+            api_resp = biz_client.get_session(full_session_name)
+            session_obj = api_resp.get("session", {})
+            turns = session_obj.get("turns", [])
+            if not turns:
+                return None
+            last_turn = turns[-1]
+            diagnostic_info = (
+                last_turn.get("diagnosticInfo")
+                or last_turn.get("detailedAssistAnswer", {}).get("diagnosticInfo")
+                or {}
+            )
+            planner_steps = diagnostic_info.get("plannerSteps") or []
+            plan_times: list[datetime] = []
+            for step in planner_steps:
+                ct = _parse_dt(step.get("createTime"))
+                if ct and step.get("planStep"):
+                    plan_times.append(ct)
+
+            thinking_duration_ms = None
+            if len(plan_times) >= 2:
+                thinking_duration_ms = int((plan_times[-1] - plan_times[0]).total_seconds() * 1000)
+
+            assistant_ts = _parse_dt(last_turn.get("createdAt"))
+            if plan_times:
+                assistant_ts = plan_times[-1]
+            assistant_iso = _to_iso_z(assistant_ts) if assistant_ts else None
+            return {
+                "assistant_timestamp": assistant_iso,
+                "thinking_duration_ms": thinking_duration_ms,
+            }
+        except Exception as e:
+            logger.warning(f"获取实时思考耗时失败: {e}")
+            return None
 
     if request.stream:
         async def generate():
@@ -1476,6 +1529,9 @@ async def chat_completions(
                         chunk["images"] = enriched_images
                         images_data = enriched_images
                     yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                meta = fetch_latest_turn_meta()
+                if meta:
+                    yield f"data: {json.dumps({'final_metadata': meta}, ensure_ascii=False)}\n\n"
                 yield "data: [DONE]\n\n"
 
             except Exception as e:
@@ -1518,6 +1574,9 @@ async def chat_completions(
             # 返回 canonical session_id 和 session_name，供前端更新状态
             response["session_id"] = canonical_session_id
             response["session_name"] = session_data.get("session_name")
+            meta = fetch_latest_turn_meta()
+            if meta:
+                response.update(meta)
             return response
         except Exception as e:
             import traceback

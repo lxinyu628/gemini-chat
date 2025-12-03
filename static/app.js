@@ -1074,7 +1074,6 @@ async function sendMessage () {
   console.log('[DEBUG] 发送消息, session_id:', state.currentConversationId);
 
   // 显示加载指示器
-  const requestStartTime = Date.now();
   const loadingId = showTypingIndicator();
   let typingIndicatorRemoved = false;
   const removeTyping = () => {
@@ -1120,7 +1119,7 @@ async function sendMessage () {
     let thinkingParts = [];
     let done = false;
 
-    let thinkingStartTime = requestStartTime;
+    let finalMetadata = null;
 
     const appendStreamChunk = (dataStr) => {
       if (dataStr === '[DONE]') {
@@ -1149,6 +1148,18 @@ async function sendMessage () {
         console.log('[STREAM] chunk:', { deltaContent: deltaContent.slice(0, 50), deltaThought, messageThoughts, assistantMsgDiv: !!assistantMsgDiv });
       }
 
+     if (payload.final_metadata) {
+       finalMetadata = payload.final_metadata;
+        if (assistantMsgDiv && finalMetadata.assistant_timestamp) {
+          updateMessageTimestamp(assistantMsgDiv, finalMetadata.assistant_timestamp);
+        }
+        if (contentDiv && thinkingBlock && finalMetadata.thinking_duration_ms != null) {
+          updateThinkingBlock(thinkingBlock, {
+            durationMs: finalMetadata.thinking_duration_ms
+          });
+        }
+      }
+
       // 收集思考内容
       if (deltaThought) {
         thinkingParts.push(deltaThought);
@@ -1166,7 +1177,7 @@ async function sendMessage () {
       if (hasNewContent && !assistantMsgDiv) {
         removeTyping();
         // 首次收到内容，创建消息气泡
-        assistantMsgDiv = appendMessage('assistant', '', null, null, null, false, null, new Date().toISOString());
+        assistantMsgDiv = appendMessage('assistant', '', null, null, null, false, null, null, null, true);
         textEl = assistantMsgDiv.querySelector('.message-text');
         contentDiv = assistantMsgDiv.querySelector('.message-content');
 
@@ -1238,7 +1249,7 @@ async function sendMessage () {
 
     const thinkingContent = thinkingParts.length > 0 ? thinkingParts.join('\n') : null;
     // 计算思考耗时
-    const thinkingDuration = thinkingContent && thinkingStartTime ? Date.now() - thinkingStartTime : null;
+    const thinkingDuration = finalMetadata ? finalMetadata.thinking_duration_ms : null;
 
     if (contentDiv && thinkingBlock) {
       if (thinkingContent) {
@@ -1252,6 +1263,10 @@ async function sendMessage () {
           durationMs: null
         });
       }
+    }
+
+    if (assistantMsgDiv && finalMetadata && finalMetadata.assistant_timestamp) {
+      updateMessageTimestamp(assistantMsgDiv, finalMetadata.assistant_timestamp);
     }
 
     if (assistantMsgDiv) {
@@ -1391,7 +1406,7 @@ function parseUserMessageFileInfo (content) {
 }
 
 // 消息显示
-function appendMessage (role, content, images = null, thinking = null, errorInfo = null, isSkipped = false, attachments = null, timestampIso = null, thinkingDurationMs = null) {
+function appendMessage (role, content, images = null, thinking = null, errorInfo = null, isSkipped = false, attachments = null, timestampIso = null, thinkingDurationMs = null, suppressTimestamp = false) {
   const messageDiv = document.createElement('div');
   messageDiv.className = `message ${role}`;
 
@@ -1671,7 +1686,8 @@ function appendMessage (role, content, images = null, thinking = null, errorInfo
 
   const tsDiv = document.createElement('div');
   tsDiv.className = 'message-timestamp';
-  tsDiv.textContent = formatTimestamp(timestampIso);
+  tsDiv.textContent = suppressTimestamp ? '' : formatTimestamp(timestampIso);
+  tsDiv.dataset.suppressed = suppressTimestamp ? '1' : '0';
   contentDiv.appendChild(tsDiv);
 
   messageDiv.appendChild(avatar);
@@ -1685,6 +1701,14 @@ function appendMessage (role, content, images = null, thinking = null, errorInfo
   }
 
   return messageDiv;
+}
+
+function updateMessageTimestamp (messageDiv, timestampIso) {
+  if (!messageDiv) return;
+  const tsDiv = messageDiv.querySelector('.message-timestamp');
+  if (!tsDiv) return;
+  tsDiv.textContent = formatTimestamp(timestampIso);
+  tsDiv.dataset.suppressed = '0';
 }
 
 function renderImagesForMessage (messageDiv, images = []) {
