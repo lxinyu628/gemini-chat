@@ -471,6 +471,10 @@ class RemoteBrowserSession:
         if callback in self._subscribers:
             self._subscribers.remove(callback)
 
+    def has_subscribers(self) -> bool:
+        """是否还有活跃的订阅者（用于判断是否可以自动关闭浏览器）"""
+        return len(self._subscribers) > 0
+
     async def _broadcast(self, message: dict) -> None:
         """广播消息给所有订阅者"""
         for callback in self._subscribers:
