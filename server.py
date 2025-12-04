@@ -1,4 +1,5 @@
 """FastAPI 后端服务，提供 OpenAI 兼容 API 和前端页面"""
+import asyncio
 import json
 import os
 import time
@@ -113,29 +114,17 @@ _is_primary_worker = False
 
 
 def _check_primary_worker() -> bool:
-    """检查是否应该作为主 worker 运行后台服务
-
-    在多 worker 模式下，只有一个 worker 应该运行浏览器保活等后台服务。
-    使用文件锁来协调（跨平台兼容）。
-    """
+    """使用文件锁确保后台服务只启动一份（无论是否多 worker）"""
     import os
     import tempfile
 
-    # 检查是否在 Gunicorn 多 worker 模式下
-    # Gunicorn 会设置 SERVER_SOFTWARE 环境变量
-    server_software = os.environ.get("SERVER_SOFTWARE", "")
-    if "gunicorn" not in server_software.lower():
-        # 非 Gunicorn 模式（如直接 uvicorn），总是主 worker
-        return True
-
-    # 使用跨平台的文件锁机制
     lock_file = os.path.join(tempfile.gettempdir(), "gemini_chat_browser_keep_alive.lock")
 
     try:
         # Windows 使用 msvcrt，Unix 使用 fcntl
         if os.name == "nt":
-            # Windows
             import msvcrt
+
             lock_fd = open(lock_file, "w")
             try:
                 msvcrt.locking(lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
@@ -145,8 +134,8 @@ def _check_primary_worker() -> bool:
                 lock_fd.close()
                 return False
         else:
-            # Unix/Linux/Mac
             import fcntl
+
             lock_fd = open(lock_file, "w")
             try:
                 fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -2359,8 +2348,19 @@ async def browser_websocket(websocket: WebSocket) -> None:
 
     finally:
         session.unsubscribe(send_message)
-        # 注意：不自动停止浏览器，让用户可以重新连接
-        # 浏览器会在登录成功后或用户手动停止时关闭
+
+        async def _delayed_stop():
+            # 给前端留出短时间重连，避免一直占用 Chrome 进程
+            await asyncio.sleep(30)
+            if session.has_subscribers():
+                return
+            try:
+                await session.stop()
+                logger.info("WebSocket 已断开，自动停止远程浏览器以释放资源")
+            except Exception as e:
+                logger.warning(f"自动停止远程浏览器失败: {e}")
+
+        asyncio.create_task(_delayed_stop())
 
 
 @app.post("/api/browser/start")
