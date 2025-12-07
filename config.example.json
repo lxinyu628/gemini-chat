@@ -39,5 +39,12 @@
     "_comment": "远程浏览器配置 - 用于登录和 Cookie 刷新",
     "_comment_headless": "是否无头模式，Linux服务器设为true，Windows本地可设为false以显示浏览器窗口",
     "headless": true
+  },
+  "security": {
+    "_comment": "安全配置 - API Key 管理",
+    "_comment_admin_password": "管理密码（明文存储），用于保护 API Key 管理界面",
+    "_comment_require_api_key": "是否要求 API Key 验证，设为 true 后调用 /v1/chat/completions 需要 Authorization: Bearer sk-xxx",
+    "admin_password": "",
+    "require_api_key": false
   }
 }

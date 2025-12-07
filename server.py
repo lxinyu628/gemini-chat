@@ -37,6 +37,13 @@ from biz_gemini.browser_keep_alive import (
     try_refresh_cookie_via_browser,
 )
 from biz_gemini.logger import get_logger
+from biz_gemini.api_keys import (
+    generate_api_key,
+    list_api_keys,
+    get_api_key_by_id,
+    validate_api_key,
+    delete_api_key,
+)
 from config_watcher import start_config_watcher, stop_config_watcher
 from version import VERSION, get_version_info, GITHUB_REPO
 
@@ -803,6 +810,114 @@ async def logout() -> dict:
         }
 
 
+# ==================== API Key 管理端点 ====================
+
+class PasswordRequest(BaseModel):
+    password: str
+
+
+class ApiKeyCreateRequest(BaseModel):
+    password: str
+    name: str = ""
+
+
+@app.post("/api/auth/verify-password")
+async def verify_password(request: PasswordRequest) -> dict:
+    """验证管理密码
+    
+    首次调用时设置密码，后续调用验证密码
+    """
+    config = load_config()
+    security = config.get("security", {})
+    stored_password = security.get("admin_password", "")
+    
+    if not stored_password:
+        # 首次设置密码
+        if len(request.password) < 4:
+            raise HTTPException(status_code=400, detail="密码长度至少4位")
+        save_config({"security": {"admin_password": request.password}})
+        return {"success": True, "message": "密码设置成功", "is_new": True}
+    
+    # 验证密码
+    if request.password == stored_password:
+        return {"success": True, "message": "密码验证成功", "is_new": False}
+    else:
+        raise HTTPException(status_code=401, detail="密码错误")
+
+
+@app.get("/api/auth/has-password")
+async def has_password() -> dict:
+    """检查是否已设置管理密码"""
+    config = load_config()
+    security = config.get("security", {})
+    has_pwd = bool(security.get("admin_password", ""))
+    return {"has_password": has_pwd}
+
+
+@app.get("/api/keys")
+async def get_api_keys(password: str) -> dict:
+    """获取所有 API Key（脱敏显示）"""
+    # 验证密码
+    config = load_config()
+    security = config.get("security", {})
+    stored_password = security.get("admin_password", "")
+    
+    if not stored_password or password != stored_password:
+        raise HTTPException(status_code=401, detail="密码错误")
+    
+    keys = list_api_keys(include_full_key=False)
+    return {"success": True, "keys": keys}
+
+
+@app.post("/api/keys")
+async def create_api_key(request: ApiKeyCreateRequest) -> dict:
+    """生成新的 API Key"""
+    # 验证密码
+    config = load_config()
+    security = config.get("security", {})
+    stored_password = security.get("admin_password", "")
+    
+    if not stored_password or request.password != stored_password:
+        raise HTTPException(status_code=401, detail="密码错误")
+    
+    key_data = generate_api_key(name=request.name)
+    return {"success": True, "key": key_data}
+
+
+@app.get("/api/keys/{key_id}")
+async def get_full_api_key(key_id: int, password: str) -> dict:
+    """获取完整的 API Key（用于复制）"""
+    # 验证密码
+    config = load_config()
+    security = config.get("security", {})
+    stored_password = security.get("admin_password", "")
+    
+    if not stored_password or password != stored_password:
+        raise HTTPException(status_code=401, detail="密码错误")
+    
+    key_data = get_api_key_by_id(key_id)
+    if not key_data:
+        raise HTTPException(status_code=404, detail="API Key 不存在")
+    
+    return {"success": True, "key": key_data}
+
+
+@app.delete("/api/keys/{key_id}")
+async def remove_api_key(key_id: int, password: str) -> dict:
+    """删除 API Key"""
+    # 验证密码
+    config = load_config()
+    security = config.get("security", {})
+    stored_password = security.get("admin_password", "")
+    
+    if not stored_password or password != stored_password:
+        raise HTTPException(status_code=401, detail="密码错误")
+    
+    success = delete_api_key(key_id)
+    if success:
+        return {"success": True, "message": "API Key 已删除"}
+    else:
+        raise HTTPException(status_code=404, detail="API Key 不存在")
 
 
 @app.get("/api/sessions")
@@ -1770,9 +1885,24 @@ async def chat_completions(
     request: ChatRequest,
     x_session_id: Optional[str] = Header(None, alias="X-Session-Id"),
     conversation_id: Optional[str] = Header(None, alias="Conversation-Id"),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
     response: Response = None,
 ) -> Union[dict, StreamingResponse]:
     """OpenAI 兼容的聊天接口（保持当前前端行为）。"""
+    # API Key 验证
+    config = load_config()
+    security = config.get("security", {})
+    if security.get("require_api_key", False):
+        if not authorization:
+            raise HTTPException(status_code=401, detail="缺少 Authorization header")
+        # 解析 Bearer token
+        parts = authorization.split(" ", 1)
+        if len(parts) != 2 or parts[0].lower() != "bearer":
+            raise HTTPException(status_code=401, detail="Authorization 格式错误，应为 Bearer sk-xxx")
+        api_key = parts[1]
+        if not validate_api_key(api_key):
+            raise HTTPException(status_code=401, detail="无效的 API Key")
+    
     return await _chat_completions_handler(
         request=request,
         x_session_id=x_session_id,
@@ -1787,6 +1917,7 @@ async def chat_completions_strict(
     request: ChatRequest,
     x_session_id: Optional[str] = Header(None, alias="X-Session-Id"),
     conversation_id: Optional[str] = Header(None, alias="Conversation-Id"),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
     response: Response = None,
 ) -> Union[dict, StreamingResponse]:
     """严格遵循 OpenAI Chat Completions 协议的接口。
@@ -1795,6 +1926,19 @@ async def chat_completions_strict(
     - 会话信息通过响应头 X-Session-Id / X-Session-Name 传递
     - 适配 ChatWebUI / Lobe Chat 等严格校验第三方前端
     """
+    # API Key 验证
+    config = load_config()
+    security = config.get("security", {})
+    if security.get("require_api_key", False):
+        if not authorization:
+            raise HTTPException(status_code=401, detail="缺少 Authorization header")
+        parts = authorization.split(" ", 1)
+        if len(parts) != 2 or parts[0].lower() != "bearer":
+            raise HTTPException(status_code=401, detail="Authorization 格式错误，应为 Bearer sk-xxx")
+        api_key = parts[1]
+        if not validate_api_key(api_key):
+            raise HTTPException(status_code=401, detail="无效的 API Key")
+    
     return await _chat_completions_handler(
         request=request,
         x_session_id=x_session_id,

@@ -63,6 +63,11 @@ DEFAULT_CONFIG = {
         "last_refresh_time": 0,  # 上次刷新时间
         "conversation_sessions": {},  # 对话 ID -> session 映射
     },
+    # 安全配置
+    "security": {
+        "admin_password": "",  # 管理密码（明文存储，方便管理者查看恢复）
+        "require_api_key": False,  # 是否要求 API Key 验证
+    },
 }
 
 
@@ -226,6 +231,12 @@ def save_config(update: dict) -> dict:
     cfg["session"]["group_id"] = sanitize_group_id(cfg["session"].get("group_id"))
     cfg["group_id"] = cfg["session"]["group_id"]
     
+    # 处理 security 配置
+    if "security" in update:
+        if "security" not in cfg:
+            cfg["security"] = DEFAULT_CONFIG["security"].copy()
+        cfg["security"].update(update["security"])
+    
     # 保存到文件（只保存结构化数据）
     save_data = {
         "server": cfg.get("server", DEFAULT_CONFIG["server"]),
@@ -235,6 +246,7 @@ def save_config(update: dict) -> dict:
             "timeout": cfg.get("proxy", {}).get("timeout", 30) if isinstance(cfg.get("proxy"), dict) else 30,
         },
         "session": cfg["session"],
+        "security": cfg.get("security", DEFAULT_CONFIG["security"]),
     }
     
     NEW_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
