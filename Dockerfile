@@ -8,9 +8,10 @@ ENV PIP_NO_CACHE_DIR=1 \
 
 WORKDIR /app
 
-# 安装 Playwright Chromium 所需的运行时依赖
+# 安装 Playwright Chromium 所需的运行时依赖 + curl（健康检查）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    curl \
     libnss3 libnspr4 \
     libatk1.0-0 libatk-bridge2.0-0 libasound2 \
     libcups2 libdrm2 libxkbcommon0 \
@@ -26,6 +27,10 @@ RUN python -m playwright install chromium chrome
 
 COPY . .
 
+# 创建数据目录（确保存在）
+RUN mkdir -p /app/data /app/biz_gemini_images
+
 EXPOSE 8000
 
 CMD ["python", "server.py"]
+

@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+  gemini-chat:
+    build: .
+    container_name: gemini-chat
+    ports:
+      - "8000:8000"
+    volumes:
+      # 数据持久化 - 使用目录映射避免文件vs目录冲突
+      - ./data:/app/data
+      - ./biz_gemini_images:/app/biz_gemini_images
+      # 配置文件（只读）
+      - ./config.json:/app/config.json:ro
+    environment:
+      - TZ=Asia/Shanghai
+    restart: unless-stopped
+    # 健康检查
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # 可选：Redis 服务（多 worker 状态共享）
+  # redis:
+  #   image: redis:7-alpine
+  #   container_name: gemini-redis
+  #   ports:
+  #     - "6379:6379"
+  #   volumes:
+  #     - redis_data:/data
+  #   restart: unless-stopped
+
+# volumes:
+#   redis_data:

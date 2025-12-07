@@ -4,22 +4,29 @@ __pycache__/
 *$py.class
 *.so
 .Python
-venv/
-env/
-ENV/
 *.egg-info/
 dist/
 build/
-.claude/
+
+# 虚拟环境
+venv/
+env/
+ENV/
+.venv/
 
 # 配置文件（敏感信息）
 config.json
 .env
 *.backup
+
+# 数据文件
 *.db
 data/
+biz_gemini_images/
+conversations/
+uploads/
 
-# 日志文件
+# 日志
 log/
 *.log
 
@@ -36,10 +43,19 @@ Thumbs.db
 *.swo
 *~
 
-# 数据文件
-conversations/
-biz_gemini_images/
-uploads/
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# 文档（可选排除）
+# README.md
+# LICENSE
+
+# 测试
+.pytest_cache/
+.coverage
+htmlcov/
 
 # Playwright
 .playwright/
@@ -49,3 +65,4 @@ test-results/
 # 其他
 *.pid
 .cache/
+.claude/

@@ -3,8 +3,10 @@
 提供 API Key 的生成、存储、验证等功能。
 使用 SQLite3 数据库存储 API Keys。
 """
+import logging
 import os
 import secrets
+import shutil
 import sqlite3
 import string
 import threading
@@ -12,12 +14,34 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 
-# 数据库文件路径
+# 模块级 logger
+logger = logging.getLogger("api_keys")
+
+# 数据库文件路径 - 使用 data 目录
 PROJECT_ROOT = Path(__file__).parent.parent
-DB_FILE = PROJECT_ROOT / "api_keys.db"
+DATA_DIR = PROJECT_ROOT / "data"
+DB_FILE = DATA_DIR / "api_keys.db"
+OLD_DB_FILE = PROJECT_ROOT / "api_keys.db"  # 旧位置，用于迁移
 
 # 线程锁，确保数据库操作线程安全
 _db_lock = threading.Lock()
+
+
+def _migrate_db_if_needed() -> None:
+    """无感迁移：如果旧位置存在数据库，自动迁移到新位置"""
+    # 确保 data 目录存在
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    
+    # 如果旧文件存在且新文件不存在，执行迁移
+    if OLD_DB_FILE.exists() and not DB_FILE.exists():
+        try:
+            shutil.move(str(OLD_DB_FILE), str(DB_FILE))
+            logger.info(f"数据库已自动迁移: {OLD_DB_FILE} -> {DB_FILE}")
+        except Exception as e:
+            logger.warning(f"数据库迁移失败: {e}，将在新位置创建数据库")
+    elif OLD_DB_FILE.exists() and DB_FILE.exists():
+        # 两个位置都有文件，记录警告但使用新位置
+        logger.warning(f"检测到新旧位置都存在数据库文件，使用新位置: {DB_FILE}")
 
 
 def _get_connection() -> sqlite3.Connection:
@@ -239,5 +263,7 @@ def toggle_api_key(key_id: int, is_active: bool) -> bool:
             conn.close()
 
 
-# 初始化数据库
+# 初始化：先迁移旧数据库，再初始化
+_migrate_db_if_needed()
 init_db()
+
