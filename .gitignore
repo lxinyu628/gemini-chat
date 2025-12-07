@@ -16,6 +16,7 @@ build/
 config.json
 .env
 *.backup
+*.db
 
 # 日志文件
 log/
