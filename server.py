@@ -2313,7 +2313,30 @@ async def download_session_image(session_id: str, file_id: str, session_name: Op
         biz_client = BizGeminiClient(config, jwt_manager)
 
         # 确定 session_name（用于查询文件元数据）
-        query_session_name = session_name or f"collections/default_collection/engines/agentspace-engine/sessions/{session_id}"
+        # 首先尝试使用传入的 session_name
+        if session_name:
+            # 如果 session_name 已经包含 projects/ 前缀，直接使用
+            if session_name.startswith("projects/"):
+                query_session_name = session_name
+            else:
+                # 尝试添加 project_id 前缀
+                project_id = config.get("project_id")
+                if project_id:
+                    # 确保 session_name 以 collections/ 开头
+                    if session_name.startswith("collections/"):
+                        query_session_name = f"projects/{project_id}/locations/global/{session_name}"
+                    else:
+                        query_session_name = session_name
+                else:
+                    query_session_name = session_name
+        else:
+            # 没有传入 session_name，使用 session_id 构造
+            project_id = config.get("project_id")
+            base_session = f"collections/default_collection/engines/agentspace-engine/sessions/{session_id}"
+            if project_id:
+                query_session_name = f"projects/{project_id}/locations/global/{base_session}"
+            else:
+                query_session_name = base_session
 
         logger.debug(f"下载图片请求: session_id={session_id}, file_id={file_id}, query_session_name={query_session_name}")
 

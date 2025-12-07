@@ -292,12 +292,18 @@ class RemoteBrowserSession:
 
             url = self._page.url
 
-            # 解析 csesidx 和 group_id
+            # 解析 csesidx、group_id 和 project_id
             csesidx = None
             group_id = None
+            project_id = None
 
             if "csesidx=" in url:
                 csesidx = url.split("csesidx=", 1)[1].split("&", 1)[0]
+
+            # 提取 project_id（从 URL 参数 project= 获取）
+            if "project=" in url:
+                project_id = url.split("project=", 1)[1].split("&", 1)[0]
+                logger.debug(f"从 URL 获取到 project_id: {project_id}")
 
             if "/cid/" in url:
                 after = url.split("/cid/", 1)[1]
@@ -343,6 +349,30 @@ class RemoteBrowserSession:
                     except Exception as e:
                         logger.warning(f"从页面链接获取 group_id 失败: {e}")
 
+            # 从页面脚本中提取 projectNumber（更可靠的方式）
+            if not project_id:
+                try:
+                    # 尝试从 WIZ_global_data 中提取 projectNumber
+                    project_id = await self._page.evaluate("""
+                        () => {
+                            try {
+                                if (window.WIZ_global_data && window.WIZ_global_data.LqbZsd) {
+                                    const data = JSON.parse(window.WIZ_global_data.LqbZsd);
+                                    if (data.engineResourceDetails && data.engineResourceDetails.projectNumber) {
+                                        return data.engineResourceDetails.projectNumber;
+                                    }
+                                }
+                            } catch (e) {
+                                console.error('提取 projectNumber 失败:', e);
+                            }
+                            return null;
+                        }
+                    """)
+                    if project_id:
+                        logger.info(f"从页面脚本获取到 project_id: {project_id}")
+                except Exception as e:
+                    logger.warning(f"从页面脚本获取 project_id 失败: {e}")
+
             # 获取 cookies - 收集 auth.business.gemini.google 和 business.gemini.google 域的全部 cookie
             cookies = await self._context.cookies()
             secure_c_ses = None
@@ -384,13 +414,14 @@ class RemoteBrowserSession:
                     "nid": nid,
                     "csesidx": csesidx,
                     "group_id": group_id,
-                    "cookie_raw": cookie_raw,  # 新增：完整的 raw cookie header
+                    "project_id": project_id,  # 新增：用于构造图片下载 URL
+                    "cookie_raw": cookie_raw,  # 完整的 raw cookie header
                     "cookies_saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "cookie_profile_dir": profile_dir,  # 记录 cookie 来源目录
                 }
 
                 # 日志记录 cookie 保存信息
-                logger.info(f"登录成功，保存 cookies: csesidx={csesidx}, profile_dir={profile_dir}")
+                logger.info(f"登录成功，保存 cookies: csesidx={csesidx}, group_id={group_id}, project_id={project_id}, profile_dir={profile_dir}")
                 logger.debug(f"Cookie 长度: secure_c_ses={len(secure_c_ses) if secure_c_ses else 0}, "
                            f"host_c_oses={len(host_c_oses) if host_c_oses else 0}, "
                            f"nid={len(nid) if nid else 0}, "
