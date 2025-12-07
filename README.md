@@ -241,6 +241,48 @@ GET    /api/sessions/{id}/messages  # 获取会话历史
 DELETE /api/sessions/{id}        # 删除会话
 ```
 
+### API Key 管理
+
+支持生成和管理 API Key，可用于保护 `/v1/chat/completions` 接口。
+
+**启用 API Key 验证**：在 `config.json` 中设置：
+
+```json
+{
+  "security": {
+    "admin_password": "your-password",
+    "require_api_key": true
+  }
+}
+```
+
+启用后，调用 API 需要在请求头中添加：
+
+```bash
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-your-api-key" \
+  -d '{"model": "auto", "messages": [{"role": "user", "content": "你好"}]}'
+```
+
+**管理 API Key**：
+
+1. 打开 Web 界面，点击左下角状态指示器
+2. 选择"获取 API Key"
+3. 首次使用需设置管理密码（密码明文存储在 `config.json` 中，方便管理者查看恢复）
+4. 可生成、复制、删除 API Key
+
+**API Key 管理端点**：
+
+```bash
+GET  /api/auth/has-password      # 检查是否已设置密码
+POST /api/auth/verify-password   # 验证/设置密码
+GET  /api/keys?password=xxx      # 获取 API Key 列表
+POST /api/keys                   # 生成新 API Key
+GET  /api/keys/{id}?password=xxx # 获取完整 Key（用于复制）
+DELETE /api/keys/{id}?password=xxx # 删除 API Key
+```
+
 ## 环境变量配置
 
 除了 `config.json`，还可以通过环境变量配置（优先级更高）：

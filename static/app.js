@@ -15,7 +15,7 @@ const state = {
 // ==================== Lucide 图标自动渲染 ====================
 
 // 使用 MutationObserver 监听 DOM 变化，自动渲染新添加的 Lucide 图标
-(function initLucideObserver () {
+(function initLucideObserver() {
   if (typeof lucide === 'undefined') return;
 
   // 防抖：避免频繁调用
@@ -76,7 +76,7 @@ const ToastIcons = {
  * @param {number} options.duration - 显示时长(ms)，默认 4000，设为 0 则不自动关闭
  * @param {boolean} options.closable - 是否可手动关闭，默认 true
  */
-function showToast (options) {
+function showToast(options) {
   const {
     type = 'info',
     title = '',
@@ -125,7 +125,7 @@ function showToast (options) {
   return toast;
 }
 
-function removeToast (toast) {
+function removeToast(toast) {
   if (!toast || !toast.parentNode) return;
 
   toast.classList.add('toast-hiding');
@@ -137,7 +137,7 @@ function removeToast (toast) {
 }
 
 // 便捷方法
-function toast (message, type = 'info') {
+function toast(message, type = 'info') {
   const titles = {
     success: '成功',
     error: '错误',
@@ -355,7 +355,7 @@ if (typeof marked !== 'undefined') {
 }
 
 // 渲染 Markdown 内容
-function renderMarkdown (content) {
+function renderMarkdown(content) {
   if (typeof marked === 'undefined') {
     // 如果 marked 未加载，返回转义后的 HTML
     return escapeHtml(content).replace(/\n/g, '<br>');
@@ -369,7 +369,7 @@ function renderMarkdown (content) {
 }
 
 // 为代码块添加复制按钮
-function addCodeCopyButtons (container) {
+function addCodeCopyButtons(container) {
   const codeBlocks = container.querySelectorAll('pre');
   codeBlocks.forEach(pre => {
     // 创建复制按钮
@@ -457,17 +457,17 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // 主题切换
-function initTheme () {
+function initTheme() {
   document.documentElement.setAttribute('data-theme', state.theme);
 }
 
-function toggleTheme () {
+function toggleTheme() {
   state.theme = state.theme === 'light' ? 'dark' : 'light';
   localStorage.setItem('theme', state.theme);
   document.documentElement.setAttribute('data-theme', state.theme);
 }
 
-function handleResponsiveSidebar () {
+function handleResponsiveSidebar() {
   const isMobile = window.innerWidth <= 1024;
   if (isMobile) {
     document.body.classList.remove('sidebar-open');
@@ -479,7 +479,7 @@ function handleResponsiveSidebar () {
 }
 
 // 事件监听
-function initEventListeners () {
+function initEventListeners() {
   elements.themeToggle.addEventListener('click', toggleTheme);
   elements.sidebarToggle.addEventListener('click', toggleSidebar);
   if (elements.sidebarBackdrop) {
@@ -505,7 +505,7 @@ function initEventListeners () {
   const maxLines = 5;
   const maxHeight = lineHeight * maxLines; // 5行高度 = 120px
 
-  function autoResize () {
+  function autoResize() {
     // 先重置高度以获取正确的 scrollHeight
     messageInput.style.height = 'auto';
     const scrollHeight = messageInput.scrollHeight - 28; // 减去 padding
@@ -545,7 +545,7 @@ function initEventListeners () {
   autoResize();
 }
 
-function toggleSidebar () {
+function toggleSidebar() {
   const isMobile = window.innerWidth <= 1024;
   if (isMobile) {
     document.body.classList.toggle('sidebar-open');
@@ -554,19 +554,19 @@ function toggleSidebar () {
   }
 }
 
-function closeSidebarOnMobile () {
+function closeSidebarOnMobile() {
   if (window.innerWidth <= 1024) {
     document.body.classList.remove('sidebar-open');
   }
 }
 
-function updateSendButton () {
+function updateSendButton() {
   const hasText = elements.messageInput.value.trim().length > 0;
   elements.sendBtn.disabled = !hasText;
 }
 
 // 状态检查
-async function checkStatus () {
+async function checkStatus() {
   try {
     const response = await fetch('/api/status');
     const data = await response.json();
@@ -613,12 +613,12 @@ async function checkStatus () {
   }
 }
 
-function startStatusMonitoring () {
+function startStatusMonitoring() {
   // 每分钟检查一次状态
   state.statusCheckInterval = setInterval(checkStatus, 60000);
 }
 
-async function loadVersionInfo () {
+async function loadVersionInfo() {
   try {
     const response = await fetch('/api/version');
     const data = await response.json();
@@ -630,13 +630,13 @@ async function loadVersionInfo () {
   }
 }
 
-function showExpiredModal () {
+function showExpiredModal() {
   elements.expiredModal.classList.add('show');
   // 不再自动打开登录模态框和启动浏览器，由用户点击触发
 }
 
 // 模型加载
-async function loadModels () {
+async function loadModels() {
   try {
     // 从 /v1/models 接口获取模型列表
     const response = await fetch('/v1/models');
@@ -666,7 +666,7 @@ async function loadModels () {
 }
 
 // 更新模型显示名称
-function updateModelDisplay () {
+function updateModelDisplay() {
   const model = modelsList.find(m => m.id === state.currentModel);
   if (model) {
     elements.modelName.textContent = model.name;
@@ -676,7 +676,7 @@ function updateModelDisplay () {
 // 模型下拉浮窗
 let modelDropdown = null;
 
-function toggleModelDropdown () {
+function toggleModelDropdown() {
   if (modelDropdown) {
     closeModelDropdown();
   } else {
@@ -684,7 +684,7 @@ function toggleModelDropdown () {
   }
 }
 
-function openModelDropdown () {
+function openModelDropdown() {
   if (modelDropdown) return;
 
   // 创建下拉浮窗
@@ -756,7 +756,7 @@ function openModelDropdown () {
   }, 0);
 }
 
-function closeModelDropdown () {
+function closeModelDropdown() {
   if (!modelDropdown) return;
 
   modelDropdown.classList.remove('show');
@@ -772,14 +772,14 @@ function closeModelDropdown () {
   document.removeEventListener('click', handleDropdownOutsideClick);
 }
 
-function handleDropdownOutsideClick (e) {
+function handleDropdownOutsideClick(e) {
   if (modelDropdown && !modelDropdown.contains(e.target) && !elements.modelSelector.contains(e.target)) {
     closeModelDropdown();
   }
 }
 
 // 会话管理
-async function loadConversations () {
+async function loadConversations() {
   try {
     const response = await fetch('/api/sessions');
 
@@ -810,7 +810,7 @@ async function loadConversations () {
   }
 }
 
-function renderConversations () {
+function renderConversations() {
   elements.conversationsList.innerHTML = '';
 
   state.conversations.forEach(conv => {
@@ -848,7 +848,7 @@ function renderConversations () {
   });
 }
 
-async function createNewConversation () {
+async function createNewConversation() {
   try {
     const response = await fetch('/api/sessions', {
       method: 'POST',
@@ -871,7 +871,7 @@ async function createNewConversation () {
   }
 }
 
-async function loadConversation (sessionId, sessionName = null) {
+async function loadConversation(sessionId, sessionName = null) {
   try {
     state.currentConversationId = sessionId;
     state.currentSessionName = sessionName;  // 保存完整 session name
@@ -916,7 +916,7 @@ async function loadConversation (sessionId, sessionName = null) {
   }
 }
 
-async function deleteConversation (sessionId) {
+async function deleteConversation(sessionId) {
   const confirmed = await toast.confirm({
     title: '删除对话',
     message: '确定要删除这个对话吗？此操作无法撤销。',
@@ -955,13 +955,13 @@ async function deleteConversation (sessionId) {
 }
 
 // 文件上传
-function handleFileSelect (e) {
+function handleFileSelect(e) {
   const files = Array.from(e.target.files);
   state.uploadedFiles = files;
   renderFilePreview();
 }
 
-function renderFilePreview () {
+function renderFilePreview() {
   elements.filePreview.innerHTML = '';
 
   state.uploadedFiles.forEach((file, index) => {
@@ -987,7 +987,7 @@ function renderFilePreview () {
 }
 
 // 消息发送
-async function sendMessage () {
+async function sendMessage() {
   const message = elements.messageInput.value.trim();
   if (!message && state.uploadedFiles.length === 0) return;
   const hadUploads = state.uploadedFiles.length > 0;
@@ -1300,7 +1300,7 @@ async function sendMessage () {
 }
 
 // 创建思考链显示块
-function createThinkingBlock (thinking, isActive = false, thinkingDurationMs = null) {
+function createThinkingBlock(thinking, isActive = false, thinkingDurationMs = null) {
   const block = document.createElement('div');
   block.className = 'thinking-block';
   block.dataset.durationMs = thinkingDurationMs != null ? thinkingDurationMs : '';
@@ -1357,7 +1357,7 @@ function createThinkingBlock (thinking, isActive = false, thinkingDurationMs = n
   return block;
 }
 
-function updateThinkingBlock (block, { thinkingText, isActive, durationMs }) {
+function updateThinkingBlock(block, { thinkingText, isActive, durationMs }) {
   if (!block) return;
   const titleSpan = block.querySelector('.thinking-title');
   const icon = block.querySelector('.thinking-icon');
@@ -1391,7 +1391,7 @@ function updateThinkingBlock (block, { thinkingText, isActive, durationMs }) {
 }
 
 // 解析用户消息中的文件信息
-function parseUserMessageFileInfo (content) {
+function parseUserMessageFileInfo(content) {
   // 匹配格式: [已上传文件: xxx.png, yyy.pdf]\n消息内容
   const fileInfoRegex = /^\[已上传文件: ([^\]]+)\]\n?/;
   const match = content.match(fileInfoRegex);
@@ -1406,7 +1406,7 @@ function parseUserMessageFileInfo (content) {
 }
 
 // 消息显示
-function appendMessage (role, content, images = null, thinking = null, errorInfo = null, isSkipped = false, attachments = null, timestampIso = null, thinkingDurationMs = null, suppressTimestamp = false) {
+function appendMessage(role, content, images = null, thinking = null, errorInfo = null, isSkipped = false, attachments = null, timestampIso = null, thinkingDurationMs = null, suppressTimestamp = false) {
   const messageDiv = document.createElement('div');
   messageDiv.className = `message ${role}`;
 
@@ -1711,7 +1711,7 @@ function appendMessage (role, content, images = null, thinking = null, errorInfo
   return messageDiv;
 }
 
-function updateMessageTimestamp (messageDiv, timestampIso) {
+function updateMessageTimestamp(messageDiv, timestampIso) {
   if (!messageDiv) return;
   const tsDiv = messageDiv.querySelector('.message-timestamp');
   if (!tsDiv) return;
@@ -1719,7 +1719,7 @@ function updateMessageTimestamp (messageDiv, timestampIso) {
   tsDiv.dataset.suppressed = '0';
 }
 
-function renderImagesForMessage (messageDiv, images = []) {
+function renderImagesForMessage(messageDiv, images = []) {
   if (!messageDiv || !images || images.length === 0) return;
 
   const contentDiv = messageDiv.querySelector('.message-content');
@@ -1787,7 +1787,7 @@ function renderImagesForMessage (messageDiv, images = []) {
 }
 
 // 初始化图片查看器
-function initImageViewer (container) {
+function initImageViewer(container) {
   if (!container || typeof Viewer === 'undefined') return;
 
   // 销毁旧实例
@@ -1832,7 +1832,7 @@ function initImageViewer (container) {
 }
 
 // 下载当前查看的图片
-async function downloadViewerImage (viewer) {
+async function downloadViewerImage(viewer) {
   const image = viewer.image;
   if (!image) return;
 
@@ -1857,7 +1857,7 @@ async function downloadViewerImage (viewer) {
   }
 }
 
-function ensureAssistantActions (messageDiv, content) {
+function ensureAssistantActions(messageDiv, content) {
   if (!messageDiv || !content) return;
   if (messageDiv.querySelector('.message-actions')) return;
 
@@ -1914,7 +1914,7 @@ function ensureAssistantActions (messageDiv, content) {
   contentDiv.appendChild(actionsDiv);
 }
 
-function showTypingIndicator () {
+function showTypingIndicator() {
   const id = 'typing-' + Date.now();
   const messageDiv = document.createElement('div');
   messageDiv.className = 'message assistant';
@@ -1945,19 +1945,19 @@ function showTypingIndicator () {
   return id;
 }
 
-function removeTypingIndicator (id) {
+function removeTypingIndicator(id) {
   const element = document.getElementById(id);
   if (element) {
     element.remove();
   }
 }
 
-function scrollToBottom () {
+function scrollToBottom() {
   elements.chatContainer.scrollTop = elements.chatContainer.scrollHeight;
 }
 
 // 工具函数
-function formatTimestamp (ts) {
+function formatTimestamp(ts) {
   let d;
   if (!ts) {
     d = new Date();
@@ -1987,7 +1987,7 @@ function formatTimestamp (ts) {
   return `${yyyy}-${mm}-${dd} ${hh}:${min}:${ss}`;
 }
 
-function formatFileSize (bytes) {
+function formatFileSize(bytes) {
   if (!bytes || isNaN(bytes)) return '';
   const units = ['B', 'KB', 'MB', 'GB'];
   let size = bytes;
@@ -2000,20 +2000,20 @@ function formatFileSize (bytes) {
   return `${displaySize} ${units[unitIndex]}`;
 }
 
-function formatThinkingDuration (ms) {
+function formatThinkingDuration(ms) {
   if (ms == null || isNaN(ms)) return '';
   const seconds = Math.max(0, ms) / 1000;
   const precision = seconds >= 10 ? 1 : 2;
   return ` · 已思考${seconds.toFixed(precision)}s`;
 }
 
-function escapeHtml (text) {
+function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
 }
 
-function showError (message) {
+function showError(message) {
   appendMessage('assistant', `错误: ${message}`, null, null, null, false, null, new Date().toISOString());
 }
 
@@ -2027,7 +2027,7 @@ const browserState = {
   lastUrl: null  // 记录上次的 URL，用于比较避免重复更新 DOM
 };
 
-function autoStartBrowserLogin () {
+function autoStartBrowserLogin() {
   if (state.autoBrowserStarted || browserState.connected) return;
   state.autoBrowserStarted = true;
 
@@ -2039,13 +2039,13 @@ function autoStartBrowserLogin () {
 }
 
 // 打开登录模态框
-function openLoginModal () {
+function openLoginModal() {
   document.getElementById('expiredModal').classList.remove('show');
   document.getElementById('loginModal').classList.add('show');
 }
 
 // 关闭登录模态框
-function closeLoginModal () {
+function closeLoginModal() {
   document.getElementById('loginModal').classList.remove('show');
   stopBrowser();
 }
@@ -2074,7 +2074,7 @@ document.getElementById('stopBrowserBtn').addEventListener('click', stopBrowser)
 // 手动保存配置
 document.getElementById('saveManualBtn').addEventListener('click', saveManualConfig);
 
-async function startBrowser (options = {}) {
+async function startBrowser(options = {}) {
   const { useProfile = false, auto = false } = options || {};
   let { startUrl = null } = options || {};
 
@@ -2151,7 +2151,7 @@ async function startBrowser (options = {}) {
   }
 }
 
-function stopBrowser () {
+function stopBrowser() {
   if (browserState.ws) {
     browserState.ws.send(JSON.stringify({ action: 'stop' }));
     browserState.ws.close();
@@ -2160,7 +2160,7 @@ function stopBrowser () {
   state.autoBrowserStarted = false;
 }
 
-function handleBrowserMessage (data) {
+function handleBrowserMessage(data) {
   const statusDiv = document.getElementById('browserStatus');
   const containerDiv = document.getElementById('browserContainer');
   const screenImg = document.getElementById('browserScreen');
@@ -2236,7 +2236,7 @@ function handleBrowserMessage (data) {
   }
 }
 
-function saveAndClose () {
+function saveAndClose() {
   if (browserState.ws && browserState.connected) {
     browserState.ws.send(JSON.stringify({ action: 'save_config' }));
   }
@@ -2311,7 +2311,7 @@ document.getElementById('browserScreen').addEventListener('wheel', (e) => {
 });
 
 // 手动保存配置
-async function saveManualConfig () {
+async function saveManualConfig() {
   const config = {
     secure_c_ses: document.getElementById('manualSecureCses').value.trim(),
     group_id: document.getElementById('manualGroupId').value.trim(),
@@ -2356,7 +2356,7 @@ async function saveManualConfig () {
 }
 
 // 退出登录
-async function logout () {
+async function logout() {
   const confirmed = await toast.confirm({
     title: '退出登录',
     message: '确定要退出登录吗？退出后需要重新登录才能使用。',
@@ -2389,7 +2389,7 @@ async function logout () {
 }
 
 // 显示账号操作菜单
-function showAccountMenu () {
+function showAccountMenu() {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.className = 'confirm-overlay';
@@ -2406,6 +2406,7 @@ function showAccountMenu () {
                 <div class="confirm-message">${escapeHtml(state.currentUsername || '未知用户')}</div>
             </div>
             <div class="confirm-footer" style="flex-direction: column; gap: 8px;">
+                <button class="btn btn-secondary account-menu-btn" data-action="apikey" style="width: 100%;">获取 API Key</button>
                 <button class="btn btn-secondary account-menu-btn" data-action="relogin" style="width: 100%;">重新登录</button>
                 <button class="btn btn-secondary account-menu-btn" data-action="logout" style="width: 100%; color: var(--error-color);">退出登录</button>
                 <button class="btn btn-secondary account-menu-btn" data-action="close" style="width: 100%;">关闭</button>
@@ -2464,6 +2465,8 @@ document.getElementById('statusIndicator').addEventListener('click', async (e) =
       logout();
     } else if (action === 'relogin') {
       openLoginModal();
+    } else if (action === 'apikey') {
+      showApiKeyManager();
     }
     // action === 'close' 时不做任何操作
   } else {
@@ -2479,3 +2482,274 @@ window.addEventListener('beforeunload', () => {
   }
   stopBrowser();
 });
+
+// ==================== API Key 管理 ====================
+
+// 缓存密码（仅在会话期间）
+let cachedApiKeyPassword = null;
+
+// 显示密码输入对话框
+async function showPasswordDialog(isNew = false) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'confirm-overlay';
+
+    const dialog = document.createElement('div');
+    dialog.className = 'confirm-dialog confirm-info';
+
+    dialog.innerHTML = `
+      <div class="confirm-header">
+        <div class="confirm-icon">${ToastIcons.info}</div>
+        <div class="confirm-title">${isNew ? '设置管理密码' : '验证管理密码'}</div>
+      </div>
+      <div class="confirm-body">
+        <div class="confirm-message">${isNew ? '首次使用，请设置管理密码（至少4位）' : '请输入管理密码'}</div>
+        <input type="password" class="confirm-input" id="apiKeyPasswordInput" placeholder="请输入密码" />
+      </div>
+      <div class="confirm-footer">
+        <button class="btn btn-secondary" id="passwordCancelBtn">取消</button>
+        <button class="btn btn-primary" id="passwordConfirmBtn">确认</button>
+      </div>
+    `;
+
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+
+    requestAnimationFrame(() => {
+      overlay.classList.add('show');
+      document.getElementById('apiKeyPasswordInput').focus();
+    });
+
+    const close = (result) => {
+      overlay.classList.remove('show');
+      setTimeout(() => {
+        document.body.removeChild(overlay);
+        resolve(result);
+      }, 200);
+    };
+
+    document.getElementById('passwordCancelBtn').addEventListener('click', () => close(null));
+    document.getElementById('passwordConfirmBtn').addEventListener('click', () => {
+      const password = document.getElementById('apiKeyPasswordInput').value;
+      if (password) {
+        close(password);
+      } else {
+        toast.warning('请输入密码');
+      }
+    });
+
+    document.getElementById('apiKeyPasswordInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        const password = e.target.value;
+        if (password) {
+          close(password);
+        }
+      } else if (e.key === 'Escape') {
+        close(null);
+      }
+    });
+
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close(null);
+    });
+  });
+}
+
+// 验证密码
+async function verifyApiKeyPassword() {
+  // 如果已缓存密码，先尝试使用缓存的密码
+  if (cachedApiKeyPassword) {
+    try {
+      const resp = await fetch('/api/auth/verify-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: cachedApiKeyPassword })
+      });
+      if (resp.ok) {
+        return cachedApiKeyPassword;
+      }
+    } catch (e) {
+      // 忽略错误，继续要求输入密码
+    }
+    cachedApiKeyPassword = null;
+  }
+
+  // 检查是否已设置密码
+  const hasPasswordResp = await fetch('/api/auth/has-password');
+  const { has_password: hasPassword } = await hasPasswordResp.json();
+
+  // 显示密码输入对话框
+  const password = await showPasswordDialog(!hasPassword);
+  if (!password) return null;
+
+  // 验证/设置密码
+  try {
+    const resp = await fetch('/api/auth/verify-password', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password })
+    });
+
+    if (!resp.ok) {
+      const error = await resp.json();
+      toast.error(error.detail || '密码错误');
+      return null;
+    }
+
+    cachedApiKeyPassword = password;
+    return password;
+  } catch (e) {
+    toast.error(e.message, '验证失败');
+    return null;
+  }
+}
+
+// 显示 API Key 管理界面
+async function showApiKeyManager() {
+  const password = await verifyApiKeyPassword();
+  if (!password) return;
+
+  // 获取 API Key 列表
+  let keys = [];
+  try {
+    const resp = await fetch(`/api/keys?password=${encodeURIComponent(password)}`);
+    if (!resp.ok) {
+      toast.error('获取 API Key 列表失败');
+      return;
+    }
+    const data = await resp.json();
+    keys = data.keys || [];
+  } catch (e) {
+    toast.error(e.message, '获取失败');
+    return;
+  }
+
+  const overlay = document.createElement('div');
+  overlay.className = 'confirm-overlay';
+
+  const dialog = document.createElement('div');
+  dialog.className = 'confirm-dialog';
+  dialog.style.cssText = 'min-width: 450px; max-width: 600px;';
+
+  const renderKeyList = () => {
+    if (keys.length === 0) {
+      return '<div class="confirm-message" style="text-align: center; color: var(--text-tertiary);">暂无 API Key，点击下方按钮生成</div>';
+    }
+    return keys.map(key => `
+      <div class="api-key-item" data-id="${key.id}" style="display: flex; align-items: center; gap: 10px; padding: 10px; background: var(--bg-secondary); border-radius: 8px; margin-bottom: 8px;">
+        <div style="flex: 1; min-width: 0;">
+          <div style="font-family: monospace; font-size: 13px; color: var(--text-primary); word-break: break-all;">${escapeHtml(key.key)}</div>
+          <div style="font-size: 11px; color: var(--text-tertiary); margin-top: 4px;">创建于 ${key.created_at ? new Date(key.created_at).toLocaleString() : '未知'}</div>
+        </div>
+        <button class="btn btn-secondary copy-key-btn" data-id="${key.id}" style="padding: 6px 12px; font-size: 12px;">复制</button>
+        <button class="btn btn-secondary delete-key-btn" data-id="${key.id}" style="padding: 6px 12px; font-size: 12px; color: var(--error-color);">删除</button>
+      </div>
+    `).join('');
+  };
+
+  const updateDialog = () => {
+    dialog.innerHTML = `
+      <div class="confirm-header">
+        <div class="confirm-icon">${ToastIcons.info}</div>
+        <div class="confirm-title">API Key 管理</div>
+      </div>
+      <div class="confirm-body" style="max-height: 400px; overflow-y: auto;">
+        ${renderKeyList()}
+      </div>
+      <div class="confirm-footer" style="flex-direction: column; gap: 8px;">
+        <button class="btn btn-primary" id="generateKeyBtn" style="width: 100%;">生成新 API Key</button>
+        <button class="btn btn-secondary" id="closeKeyManagerBtn" style="width: 100%;">关闭</button>
+      </div>
+    `;
+
+    // 绑定事件
+    dialog.querySelector('#generateKeyBtn').addEventListener('click', async () => {
+      try {
+        const resp = await fetch('/api/keys', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password, name: '' })
+        });
+        if (!resp.ok) {
+          toast.error('生成失败');
+          return;
+        }
+        const data = await resp.json();
+        keys.unshift(data.key);
+        updateDialog();
+        toast.success('API Key 已生成');
+      } catch (e) {
+        toast.error(e.message, '生成失败');
+      }
+    });
+
+    dialog.querySelector('#closeKeyManagerBtn').addEventListener('click', () => close());
+
+    dialog.querySelectorAll('.copy-key-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const keyId = btn.dataset.id;
+        try {
+          const resp = await fetch(`/api/keys/${keyId}?password=${encodeURIComponent(password)}`);
+          if (!resp.ok) {
+            toast.error('获取 Key 失败');
+            return;
+          }
+          const data = await resp.json();
+          await navigator.clipboard.writeText(data.key.key);
+          toast.success('已复制到剪贴板');
+        } catch (e) {
+          toast.error(e.message, '复制失败');
+        }
+      });
+    });
+
+    dialog.querySelectorAll('.delete-key-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const keyId = btn.dataset.id;
+        const confirmed = await toast.confirm({
+          title: '删除 API Key',
+          message: '确定要删除此 API Key 吗？删除后将无法恢复。',
+          confirmText: '删除',
+          cancelText: '取消',
+          type: 'danger'
+        });
+        if (!confirmed) return;
+
+        try {
+          const resp = await fetch(`/api/keys/${keyId}?password=${encodeURIComponent(password)}`, {
+            method: 'DELETE'
+          });
+          if (!resp.ok) {
+            toast.error('删除失败');
+            return;
+          }
+          keys = keys.filter(k => k.id != keyId);
+          updateDialog();
+          toast.success('API Key 已删除');
+        } catch (e) {
+          toast.error(e.message, '删除失败');
+        }
+      });
+    });
+  };
+
+  overlay.appendChild(dialog);
+  document.body.appendChild(overlay);
+
+  requestAnimationFrame(() => {
+    overlay.classList.add('show');
+  });
+
+  const close = () => {
+    overlay.classList.remove('show');
+    setTimeout(() => {
+      document.body.removeChild(overlay);
+    }, 200);
+  };
+
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) close();
+  });
+
+  updateDialog();
+}
