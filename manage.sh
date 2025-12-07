@@ -91,6 +91,25 @@ start_server() {
     WORKERS=${SERVER_WORKERS:-$WORKERS}
     LOG_LEVEL=${SERVER_LOG_LEVEL:-$LOG_LEVEL}
     
+    # 检查Redis配置，决定worker数量
+    REDIS_ENABLED=$(python3 -c "
+import json
+try:
+    with open('$CONFIG_FILE', 'r') as f:
+        cfg = json.load(f)
+    redis_cfg = cfg.get('redis', {})
+    print('true' if redis_cfg.get('enabled', False) else 'false')
+except:
+    print('false')
+" 2>/dev/null || echo 'false')
+    
+    if [ "$REDIS_ENABLED" = "true" ]; then
+        echo -e "${GREEN}[*] Redis已启用，使用多worker模式 (workers: $WORKERS)${NC}"
+    else
+        echo -e "${YELLOW}[!] Redis未启用，强制使用单worker模式以避免502错误${NC}"
+        WORKERS=1
+    fi
+    
     echo -e "${GREEN}[*] 绑定地址: ${BIND_HOST}:${BIND_PORT}${NC}"
     echo -e "${GREEN}[*] Worker 数量: ${WORKERS}${NC}"
     echo -e "${GREEN}[*] 日志级别: ${LOG_LEVEL}${NC}"
@@ -111,6 +130,8 @@ start_server() {
             --bind "${BIND_HOST}:${BIND_PORT}" \
             --workers "$WORKERS" \
             --worker-class uvicorn.workers.UvicornWorker \
+            --timeout 300 \
+            --keep-alive 300 \
             --log-level "${LOG_LEVEL,,}" \
             --access-logfile "$ACCESS_LOG" \
             --error-logfile "$ERROR_LOG" \
@@ -123,6 +144,8 @@ start_server() {
             --host "$BIND_HOST" \
             --port "$BIND_PORT" \
             --log-level "${LOG_LEVEL,,}" \
+            --timeout-keep-alive 300 \
+            --no-access-log \
             > "$ACCESS_LOG" 2> "$ERROR_LOG" &
         echo $! > "$PID_FILE"
     fi

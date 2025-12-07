@@ -48,5 +48,20 @@
     "_comment_require_api_key": "是否要求 API Key 验证，设为 true 后调用 /v1/chat/completions 需要 Authorization: Bearer sk-xxx",
     "admin_password": "",
     "require_api_key": false
+  },
+  "redis": {
+    "_comment": "Redis 配置 - 用于多 worker 模式下的状态共享",
+    "_comment_enabled": "是否启用 Redis，启用后可使用多 worker 模式提升并发性能",
+    "_comment_host": "Redis 服务器地址",
+    "_comment_port": "Redis 服务器端口",
+    "_comment_password": "Redis 密码，如无密码留空",
+    "_comment_db": "Redis 数据库编号，默认 0",
+    "_comment_key_prefix": "Redis key 前缀，避免与其他应用冲突",
+    "enabled": false,
+    "host": "127.0.0.1",
+    "port": 6379,
+    "password": "",
+    "db": 0,
+    "key_prefix": "gemini_chat:"
   }
 }

@@ -20,5 +20,8 @@ watchdog
 # 数据验证
 pydantic
 
+# Redis（用于多 worker 状态共享）
+redis
+
 # CORS 支持
 # fastapi 自带 starlette，包含 CORSMiddleware
