@@ -68,6 +68,15 @@ DEFAULT_CONFIG = {
         "admin_password": "",  # 管理密码（明文存储，方便管理者查看恢复）
         "require_api_key": False,  # 是否要求 API Key 验证
     },
+    # Redis 配置（用于多 worker 状态共享）
+    "redis": {
+        "enabled": False,  # 是否启用 Redis
+        "host": "127.0.0.1",  # Redis 主机
+        "port": 6379,  # Redis 端口
+        "password": "",  # Redis 密码
+        "db": 0,  # Redis 数据库编号
+        "key_prefix": "gemini_chat:",  # Key 前缀
+    },
 }
 
 
@@ -246,7 +255,10 @@ def save_config(update: dict) -> dict:
             "timeout": cfg.get("proxy", {}).get("timeout", 30) if isinstance(cfg.get("proxy"), dict) else 30,
         },
         "session": cfg["session"],
+        "browser_keep_alive": cfg.get("browser_keep_alive", DEFAULT_CONFIG["browser_keep_alive"]),
+        "remote_browser": cfg.get("remote_browser", DEFAULT_CONFIG["remote_browser"]),
         "security": cfg.get("security", DEFAULT_CONFIG["security"]),
+        "redis": cfg.get("redis", DEFAULT_CONFIG["redis"]),
     }
     
     NEW_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)

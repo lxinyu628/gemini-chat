@@ -6,7 +6,7 @@ import time
 from http.cookies import SimpleCookie
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 
 import httpx
 
@@ -509,7 +509,7 @@ JWT_REFRESH_THRESHOLD = 240  # 4 分钟
 class JWTManager:
     """管理 JWT，自动在过期前刷新。
 
-    支持全局缓存，避免重复获取 JWT。
+    支持Redis共享缓存（多worker模式）和全局内存缓存（单worker模式）。
     当 Cookie 刷新后，需要调用 invalidate() 清除缓存。
     """
 
@@ -517,17 +517,81 @@ class JWTManager:
     _jwt: Optional[str] = None
     _expires_at_ts: float = 0.0
     use_global_cache: bool = True  # 是否使用全局缓存
+    _redis_manager: Optional[Any] = None  # Redis管理器实例
+
+    def __post_init__(self):
+        """初始化时创建Redis管理器"""
+        try:
+            from .redis_manager import get_redis_manager
+            self._redis_manager = get_redis_manager(self.config)
+            if self._redis_manager.is_redis_enabled():
+                logger.info("✅ JWTManager: 使用Redis存储JWT")
+            else:
+                logger.info("ℹ️ JWTManager: Redis未启用，使用内存存储JWT")
+        except Exception as e:
+            logger.warning(f"Redis初始化失败，降级到内存存储: {e}")
+            self._redis_manager = None
+
+    def _get_cached_jwt_from_redis(self) -> tuple[Optional[str], float]:
+        """从Redis获取缓存的JWT"""
+        if not self._redis_manager or not self._redis_manager.is_redis_enabled():
+            return None, 0.0
+        
+        try:
+            jwt_data = self._redis_manager.get_json("jwt_token")
+            if jwt_data and isinstance(jwt_data, dict):
+                return jwt_data.get("token"), jwt_data.get("expires_at", 0.0)
+        except Exception as e:
+            logger.debug(f"从Redis读取JWT失败: {e}")
+        return None, 0.0
+
+    def _set_cached_jwt_to_redis(self, jwt: str, expires_at: float) -> None:
+        """将JWT保存到Redis"""
+        if not self._redis_manager or not self._redis_manager.is_redis_enabled():
+            return
+        
+        try:
+            ttl = int(expires_at - time.time())
+            if ttl > 0:
+                self._redis_manager.set_json(
+                    "jwt_token",
+                    {"token": jwt, "expires_at": expires_at},
+                    ex=ttl + 60  # 额外60秒容错
+                )
+        except Exception as e:
+            logger.debug(f"保存JWT到Redis失败: {e}")
+
+    def _clear_jwt_from_redis(self) -> None:
+        """从Redis清除JWT"""
+        if not self._redis_manager or not self._redis_manager.is_redis_enabled():
+            return
+        
+        try:
+            self._redis_manager.delete("jwt_token")
+        except Exception as e:
+            logger.debug(f"从Redis删除JWT失败: {e}")
 
     def get_jwt(self) -> str:
         """获取有效的 JWT，必要时自动刷新"""
         now = time.time()
 
-        # 首先检查全局缓存
+        # 优先从Redis获取（如果启用）
+        if self._redis_manager and self._redis_manager.is_redis_enabled():
+            cached_jwt, cached_expires = self._get_cached_jwt_from_redis()
+            if cached_jwt and cached_expires > now + 60:
+                self._jwt = cached_jwt
+                self._expires_at_ts = cached_expires
+                return cached_jwt
+
+        # 回退到全局内存缓存
         if self.use_global_cache:
             cached_jwt, cached_expires = get_cached_jwt()
             if cached_jwt and cached_expires > now + 60:
                 self._jwt = cached_jwt
                 self._expires_at_ts = cached_expires
+                # 同步到Redis
+                if self._redis_manager and self._redis_manager.is_redis_enabled():
+                    self._set_cached_jwt_to_redis(cached_jwt, cached_expires)
                 return cached_jwt
 
         # 检查实例缓存，提前 60s 刷新
@@ -541,7 +605,11 @@ class JWTManager:
         self._jwt = result["jwt"]
         self._expires_at_ts = result["expires_at_ts"]
 
-        # 更新全局缓存
+        # 更新Redis缓存
+        if self._redis_manager and self._redis_manager.is_redis_enabled():
+            self._set_cached_jwt_to_redis(self._jwt, self._expires_at_ts)
+
+        # 更新全局内存缓存
         if self.use_global_cache:
             set_cached_jwt(self._jwt, self._expires_at_ts)
 
@@ -551,8 +619,15 @@ class JWTManager:
         """使 JWT 缓存失效（Cookie 刷新后调用）"""
         self._jwt = None
         self._expires_at_ts = 0.0
+        
+        # 清除Redis缓存
+        if self._redis_manager and self._redis_manager.is_redis_enabled():
+            self._clear_jwt_from_redis()
+        
+        # 清除全局内存缓存
         if self.use_global_cache:
             clear_jwt_cache()
+        
         logger.debug("JWT 缓存已清除")
 
 

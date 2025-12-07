@@ -257,11 +257,32 @@ class BizGeminiClient:
         # key: (session_name, filter_str) -> {"ts": float, "data": dict}
         self._file_metadata_cache: dict = {}
         self._file_metadata_ttl = 60  # 秒
+        
+        # Redis支持
+        try:
+            from .redis_manager import get_redis_manager
+            self._redis_manager = get_redis_manager(config)
+        except Exception as e:
+            logger.debug(f"Redis初始化失败: {e}")
+            self._redis_manager = None
 
     @property
     def session_name(self) -> str:
+        # 优先从Redis获取（如果启用）
+        if self._redis_manager and self._redis_manager.is_redis_enabled():
+            redis_key = f"session:{self.group_id}"
+            cached_session = self._redis_manager.get(redis_key)
+            if cached_session:
+                self._session_name = cached_session
+                return cached_session
+        
+        # 回退到实例缓存
         if not self._session_name:
             self._session_name = self.create_session()
+            # 保存到Redis
+            if self._redis_manager and self._redis_manager.is_redis_enabled():
+                redis_key = f"session:{self.group_id}"
+                self._redis_manager.set(redis_key, self._session_name, ex=3600)  # 1小时过期
         return self._session_name
 
     def create_session(self) -> str:
@@ -317,6 +338,10 @@ class BizGeminiClient:
 
     def reset_session(self) -> None:
         self._session_name = None
+        # 清除Redis缓存
+        if self._redis_manager and self._redis_manager.is_redis_enabled():
+            redis_key = f"session:{self.group_id}"
+            self._redis_manager.delete(redis_key)
 
     def delete_session(self, session_name: str) -> bool:
         """删除指定的会话"""
