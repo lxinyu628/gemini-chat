@@ -75,35 +75,11 @@ def _build_openai_content(response: ChatResponse, include_image_data: bool = Tru
 def _image_to_openai_format(img: ChatImage, include_data: bool = True) -> Optional[Dict]:
     """将 ChatImage 转换为 OpenAI 图片格式。
 
-    优先使用 URL（响应更小），其次使用 base64。
+    优先使用 base64 格式（符合 OpenAI 标准，第三方可直接使用）。
     """
     import os
 
-    # 优先使用本地路径构造 URL（响应更小）
-    if img.local_path and os.path.exists(img.local_path):
-        filename = os.path.basename(img.local_path)
-        return {
-            "type": "image_url",
-            "image_url": {"url": f"/api/images/{filename}"}
-        }
-
-    # 如果有 session 和 file_id，构造下载 URL
-    if img.file_id and img.session:
-        session_id = img.session.split("/")[-1] if "/" in img.session else img.session
-        url = f"/api/sessions/{session_id}/images/{img.file_id}?session_name={img.session}"
-        return {
-            "type": "image_url",
-            "image_url": {"url": url}
-        }
-
-    # 如果有直接 URL，使用它
-    if img.url:
-        return {
-            "type": "image_url",
-            "image_url": {"url": img.url}
-        }
-
-    # 最后才使用 base64（响应较大）
+    # 优先使用已有的 base64 数据
     if include_data and img.base64_data:
         mime = img.mime_type or "image/png"
         data_url = f"data:{mime};base64,{img.base64_data}"
@@ -112,8 +88,8 @@ def _image_to_openai_format(img: ChatImage, include_data: bool = True) -> Option
             "image_url": {"url": data_url}
         }
 
-    # 如果有本地路径但文件不存在，读取并转 base64
-    if include_data and img.local_path:
+    # 从本地文件读取并转换为 base64
+    if include_data and img.local_path and os.path.exists(img.local_path):
         try:
             with open(img.local_path, "rb") as f:
                 img_bytes = f.read()
@@ -126,6 +102,13 @@ def _image_to_openai_format(img: ChatImage, include_data: bool = True) -> Option
             }
         except Exception:
             pass
+
+    # 如果有直接 URL（完整的外部 URL），使用它
+    if img.url and img.url.startswith("http"):
+        return {
+            "type": "image_url",
+            "image_url": {"url": img.url}
+        }
 
     # 返回文件元数据信息（不含实际图片数据）
     if img.file_id or img.local_path:
