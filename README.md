@@ -7,6 +7,23 @@
 
 生产级的 Google Business Gemini API 服务，提供 OpenAI 兼容的聊天接口和 Web 管理界面。
 
+## 📸 界面预览
+
+<div align="center">
+  
+### Web 聊天界面
+![Web Chat Interface](docs/images/web-chat.png)
+
+### API Key 管理
+
+![API Key Management](docs/images/api-key-management.png)
+
+### 远程浏览器登录
+
+![Remote Browser Login](docs/images/remote-login.png)
+
+</div>
+
 ## 📑 目录
 
 - [特性](#-特性)
