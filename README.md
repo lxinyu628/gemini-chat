@@ -7,32 +7,68 @@
 
 生产级的 Google Business Gemini API 服务，提供 OpenAI 兼容的聊天接口和 Web 管理界面。
 
-## 特性
+## 📑 目录
 
-- ✅ **OpenAI 兼容 API** - 支持标准 OpenAI Chat Completions API 格式
-- ✅ **统一配置管理** - 单一 `config.json` 文件管理所有配置
-- ✅ **环境变量支持** - 通过环境变量覆盖配置，适合容器化部署
-- ✅ **配置热重载** - 修改配置文件无需重启服务即可生效
-- ✅ **跨平台服务管理** - Windows 和 Linux 统一的管理脚本
-- ✅ **Web 端登录** - Linux 环境支持浏览器自动登录
-- ✅ **代理支持** - 支持 HTTP/SOCKS5/SOCKS5H 代理
-- ✅ **会话管理** - 多会话支持，历史消息同步
-- ✅ **图片生成** - 支持 Gemini 图片生成功能
+- [特性](#-特性)
+- [快速开始](#-快速开始)
+  - [环境准备](#1-环境准备)
+  - [配置说明](#2-配置说明)
+  - [登录](#3-登录)
+  - [启动服务](#4-启动服务)
+- [Docker 部署](#-docker-部署)
+  - [使用 Docker Compose](#使用-docker-compose-推荐)
+  - [手动 Docker 部署](#手动-docker-部署)
+- [API 使用](#-api-使用)
+  - [智能双模式验证](#智能双模式验证)
+  - [OpenAI 兼容 API](#openai-兼容-api)
+  - [API Key 管理](#api-key-管理)
+  - [会话管理](#会话管理)
+- [配置详解](#-配置详解)
+  - [完整配置项](#完整配置项)
+  - [环境变量](#环境变量)
+  - [配置热重载](#配置热重载)
+- [Web 界面](#-web-界面)
+- [故障排除](#-故障排除)
+- [生产部署](#-生产部署建议)
+- [开发指南](#-开发模式)
+- [许可证](#-许可证)
 
-## 快速开始
+## ✨ 特性
+
+### 核心功能
+
+- ✅ **OpenAI 兼容 API** - 完全兼容 OpenAI Chat Completions API 格式
+- ✅ **智能双模式验证** - 前端 Cookie 验证 + 第三方 API Key 验证
+- ✅ **Web 管理界面** - 美观的聊天界面，支持图片生成和管理
+- ✅ **多会话管理** - 支持多个独立对话会话，历史记录同步
+
+### 安全与管理
+
+- 🔒 **API Key 管理** - 可创建、查看、删除 API Key
+- 🔐 **双重验证机制** - Cookie 优先，API Key 备用
+- 🛡️ **防抓包攻击** - Cookie 绑定会话，无法简单复用
+
+### 运维特性
+
+- 📦 **Docker 支持** - 完整的容器化部署方案
+- 🔄 **配置热重载** - 修改配置无需重启服务
+- 🌐 **代理支持** - HTTP/SOCKS5/SOCKS5H 代理
+- 📊 **健康检查** - 内置健康检查端点
+- 📝 **详细日志** - 完整的访问和错误日志
+
+### 兼容性
+
+- 🔌 **第三方集成** - 支持 Cherry Studio、Lobe Chat、ChatWebUI 等
+- 🖼️ **图片生成** - 支持 Gemini 图片生成和下载
+- 🎯 **严格模式** - 提供严格 OpenAI 兼容端点
+
+## 🚀 快速开始
 
 ### 1. 环境准备
 
 ```bash
-# 克隆项目（或下载项目文件）
-# 稳定版（推荐）：
+# 克隆项目
 git clone https://github.com/ccpopy/gemini-chat.git
-cd gemini-chat
-
-# 开发版（beta 分支）：
-# ⚠️ 警告：beta 分支包含最新的开发功能，但可能存在不稳定性和未修复的 bug
-# 仅建议开发者或测试用户使用
-git clone -b beta https://github.com/ccpopy/gemini-chat.git
 cd gemini-chat
 
 # 创建虚拟环境
@@ -49,57 +85,79 @@ pip install -r requirements.txt
 
 # 安装 Playwright 浏览器（用于登录）
 playwright install chromium chrome
+
+# Linux 系统还需要安装系统依赖
+playwright install-deps
 ```
 
-### 2. 配置
+### 2. 配置说明
 
 复制配置模板并编辑：
 
 ```bash
-# 复制配置文件模板
 cp config.example.json config.json
-
-# 编辑配置文件
-# Windows:
-notepad config.json
-# Linux/Mac:
-vim config.json
 ```
 
-**配置说明**：
+基础配置示例：
 
 ```json
 {
   "server": {
-    "host": "0.0.0.0", // 绑定地址
-    "port": 8000, // 绑定端口
-    "workers": 4, // Worker 进程数
-    "log_level": "INFO" // 日志级别
+    "host": "0.0.0.0",
+    "port": 8000,
+    "workers": 4,
+    "log_level": "INFO",
+    "reload": false
   },
   "proxy": {
-    "enabled": true, // 是否启用代理
-    "url": "socks5h://127.0.0.1:10808", // 代理地址
-    "timeout": 30 // 代理超时（秒）
+    "enabled": true,
+    "url": "socks5h://127.0.0.1:10808",
+    "timeout": 30
   },
   "session": {
-    // 登录后自动填充，无需手动配置
+    "_comment": "登录后自动填充，无需手动配置"
+  },
+  "browser_keep_alive": {
+    "enabled": false,
+    "interval_minutes": 60,
+    "headless": true
+  },
+  "remote_browser": {
+    "headless": true
+  },
+  "security": {
+    "admin_password": "",
+    "require_api_key": false
+  },
+  "redis": {
+    "enabled": false,
+    "host": "127.0.0.1",
+    "port": 6379,
+    "password": "",
+    "db": 0,
+    "key_prefix": "gemini_chat:"
   }
 }
 ```
 
+详细配置说明请参见 [配置详解](#-配置详解) 部分。
+
 ### 3. 登录
 
-首次使用需要登录 Google Business Gemini:
+首次使用需要登录 Google Business Gemini：
+
+**命令行登录**：
 
 ```bash
-# Windows:
 python app.py login
-
-# Linux/Mac:
-python3 app.py login
 ```
 
-登录成功后，会话信息会自动保存到 `config.json` 的 `session` 部分。
+**Web 界面登录**（推荐）：
+
+1. 启动服务后访问 http://localhost:8000
+2. 点击"登录"按钮
+3. 在弹出的浏览器中完成 Google 登录
+4. 登录成功后自动保存配置
 
 ### 4. 启动服务
 
@@ -116,16 +174,14 @@ python3 app.py login
 #### Linux/Mac
 
 ```bash
-chmod +x manage.sh        # 赋予执行权限（首次）
-./manage.sh start         # 启动服务
-./manage.sh status        # 查看状态
-./manage.sh logs          # 查看日志
-./manage.sh reload        # 重载配置（不重启）
-./manage.sh restart       # 重启服务
-./manage.sh stop          # 停止服务
+chmod +x manage.sh          # 赋予执行权限（首次）
+./manage.sh start           # 启动服务
+./manage.sh status          # 查看状态
+./manage.sh logs            # 查看日志
+./manage.sh reload          # 重载配置（不重启）
+./manage.sh restart         # 重启服务
+./manage.sh stop            # 停止服务
 ```
-
-### 5. 访问服务
 
 启动后访问：
 
@@ -133,157 +189,293 @@ chmod +x manage.sh        # 赋予执行权限（首次）
 - **API 端点**: http://localhost:8000/v1/chat/completions
 - **API 文档**: http://localhost:8000/docs
 
-### Docker 部署（快速开始）
+## 🐳 Docker 部署
 
-1. 准备配置：复制 `config.example.json` 为 `config.json`，按需填写代理等参数。
-2. 构建镜像：
+### 使用 Docker Compose（推荐）
 
-   ```bash
-   docker build -t business-gemini .
-   ```
-
-3. 运行容器（映射配置和日志目录，按需设置代理环境变量）：
-
-   ```bash
-   docker run -d --name business-gemini \
-     -p 8000:8000 \
-     -v $(pwd)/config.json:/app/config.json \
-     -v $(pwd)/log:/app/log \
-     -e PROXY_URL=socks5h://127.0.0.1:10808 \
-     business-gemini
-   ```
-
-4. 首次登录：访问 `http://localhost:8000`，过期时前端会自动弹出远程浏览器；如有 `cookie_profile_dir`，会优先复用以减少二次验证。
-5. 如果 Playwright 提示共享内存不足，可在运行参数中追加 `--shm-size=1g` 或 `--ipc=host`。
-
-## 主要 API 端点
-
-### OpenAI 兼容 API
+1. **准备配置文件**
 
 ```bash
-POST /v1/chat/completions
+# 复制配置模板
+cp config.example.json config.json
+
+# 编辑配置（设置代理等）
+vim config.json
 ```
 
-示例请求：
+2. **启动服务**
 
 ```bash
-curl -X POST http://localhost:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "business-gemini",
-    "messages": [
-      {"role": "user", "content": "你好"}
-    ]
-  }'
+# 启动
+docker-compose up -d
+
+# 查看日志
+docker-compose logs -f
+
+# 停止
+docker-compose down
 ```
 
-#### 保持会话上下文（适配 ChatWebUI/Lobe Chat 等通用前端）
+3. **首次登录**
 
-通用前端可通过自定义 Header 传递会话 ID 以保持上下文，否则每次请求都会创建新会话：
+访问 http://localhost:8000，点击"登录"按钮，在弹出的远程浏览器中完成登录。
+
+### 手动 Docker 部署
+
+1. **构建镜像**
 
 ```bash
-# 使用 X-Session-Id header（推荐）
-curl -X POST http://localhost:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "X-Session-Id: my-conversation-123" \
-  -d '{
-    "model": "business-gemini",
-    "messages": [{"role": "user", "content": "你好"}]
-  }'
-
-# 或使用 Conversation-Id header
-curl -X POST http://localhost:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Conversation-Id: my-conversation-123" \
-  -d '{
-    "model": "business-gemini",
-    "messages": [{"role": "user", "content": "继续上面的话题"}]
-  }'
+docker build -t gemini-chat .
 ```
 
-会话 ID 优先级：`X-Session-Id` header > `Conversation-Id` header > `body.session_id` > 新建会话
-
-响应中会返回 `session_id` 和 `session_name`，可用于后续请求保持上下文。
-
-#### 严格 OpenAI 兼容端点（推荐用于 ChatWebUI/Lobe Chat 等第三方）
-
-为避免第三方前端因自定义字段或流式格式校验失败，新增严格模式端点：
+2. **运行容器**
 
 ```bash
-POST /v1/openai/chat/completions
+# 创建数据目录
+mkdir -p data biz_gemini_images
+
+# 运行容器
+docker run -d \
+  --name gemini-chat \
+  -p 8000:8000 \
+  --shm-size=1g \
+  -v $(pwd)/data:/app/data \
+  -v $(pwd)/biz_gemini_images:/app/biz_gemini_images \
+  -v $(pwd)/config.json:/app/config.json:ro \
+  -e TZ=Asia/Shanghai \
+  gemini-chat
 ```
 
-- 请求体与官方 OpenAI Chat Completions 完全一致，支持 `content` 为字符串或 `[{type:"text"|"image_url", ...}]`。
-- 响应/流式输出仅包含官方字段；`session` 信息通过响应头返回：`X-Session-Id`、`X-Session-Name`。
-- 内置 Web 前端继续使用 `/v1/chat/completions` 保持现有功能（图片下载链接、思考链等），不会被破坏。
-
-### 配置管理 API
+3. **查看日志**
 
 ```bash
-POST /api/config/reload   # 手动重载配置
-GET  /api/status          # 获取登录状态
+docker logs -f gemini-chat
 ```
 
-### Web 登录 API
+**重要提示**：
 
-```bash
-POST /api/login/start     # 启动浏览器登录
-GET  /api/login/status    # 查询登录状态
-POST /api/login/cancel    # 取消登录
-```
+- `--shm-size=1g` 或 `--ipc=host` 可避免浏览器共享内存不足
+- 数据目录和配置文件需要正确映射以实现持久化
 
-### 会话管理 API
+## 📡 API 使用
 
-```bash
-GET    /api/sessions             # 列出所有会话
-POST   /api/sessions             # 创建新会话
-GET    /api/sessions/{id}/messages  # 获取会话历史
-DELETE /api/sessions/{id}        # 删除会话
-```
+### 智能双模式验证
 
-### API Key 管理
+本服务支持两种访问模式：
 
-支持生成和管理 API Key，可用于保护 `/v1/chat/completions` 接口。
+#### 🌐 前端网页访问（Cookie 验证）
 
-**启用 API Key 验证**：在 `config.json` 中设置：
+- 无需 API Key
+- 通过 Google 账号登录后自动验证
+- 体验类似 Google Gemini 官方界面
+
+#### 🔌 第三方客户端访问（API Key 验证）
+
+- 需要提供 API Key
+- 完全兼容 OpenAI API 标准
+- 适用于 Cherry Studio、Lobe Chat 等客户端
+
+**验证优先级**：Cookie > API Key
+
+即使提供了 API Key，如果服务器检测到有效的 Cookie，会优先使用 Cookie 验证。
+
+#### 启用 API Key 验证
+
+编辑 `config.json`：
 
 ```json
 {
   "security": {
-    "admin_password": "your-password",
+    "admin_password": "your_admin_password",
     "require_api_key": true
   }
 }
 ```
 
-启用后，调用 API 需要在请求头中添加：
+设置说明：
+
+- `require_api_key: true` - 启用双模式验证
+- **前端用户**：通过网页登录，无需 API Key
+- **第三方客户端**：必须提供有效的 API Key
+
+### OpenAI 兼容 API
+
+#### 基础端点
+
+```bash
+POST /v1/chat/completions
+```
+
+**使用 API Key 调用**：
 
 ```bash
 curl -X POST http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-your-api-key" \
-  -d '{"model": "auto", "messages": [{"role": "user", "content": "你好"}]}'
+  -d '{
+    "model": "auto",
+    "messages": [
+      {"role": "user", "content": "你好，介绍一下你自己"}
+    ],
+    "stream": false
+  }'
 ```
 
-**管理 API Key**：
-
-1. 打开 Web 界面，点击左下角状态指示器
-2. 选择"获取 API Key"
-3. 首次使用需设置管理密码（密码明文存储在 `config.json` 中，方便管理者查看恢复）
-4. 可生成、复制、删除 API Key
-
-**API Key 管理端点**：
+**保持会话上下文**：
 
 ```bash
-GET  /api/auth/has-password      # 检查是否已设置密码
-POST /api/auth/verify-password   # 验证/设置密码
-GET  /api/keys?password=xxx      # 获取 API Key 列表
-POST /api/keys                   # 生成新 API Key
-GET  /api/keys/{id}?password=xxx # 获取完整 Key（用于复制）
-DELETE /api/keys/{id}?password=xxx # 删除 API Key
+# 使用 X-Session-Id header
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-your-api-key" \
+  -H "X-Session-Id: my-conversation-123" \
+  -d '{
+    "model": "auto",
+    "messages": [{"role": "user", "content": "继续上次的对话"}]
+  }'
 ```
 
-## 环境变量配置
+会话 ID 优先级：`X-Session-Id` > `Conversation-Id` > `body.session_id` > 新建
+
+#### 严格 OpenAI 兼容端点
+
+适用于对协议有严格校验的第三方客户端（如 ChatWebUI、Lobe Chat）：
+
+```bash
+POST /v1/openai/chat/completions
+```
+
+特点：
+
+- 响应仅包含标准 OpenAI 字段
+- 会话信息通过响应头返回（`X-Session-Id`、`X-Session-Name`）
+- 完全兼容 OpenAI API 规范
+
+### API Key 管理
+
+#### Web 界面管理
+
+1. 访问 http://localhost:8000
+2. 点击左下角状态指示器
+3. 选择"获取 API Key"
+4. 首次使用需设置管理密码
+5. 创建、查看、删除 API Key
+
+#### API 端点
+
+```bash
+# 检查是否已设置密码
+GET /api/auth/has-password
+
+# 验证/设置密码
+POST /api/auth/verify-password
+Content-Type: application/json
+{"password": "your_password"}
+
+# 获取 API Key 列表
+GET /api/keys?password=your_password
+
+# 生成新 API Key
+POST /api/keys
+Content-Type: application/json
+{"password": "your_password", "name": "My Key", "permissions": ["chat"]}
+
+# 获取完整 Key（用于复制）
+GET /api/keys/{id}?password=your_password
+
+# 删除 API Key
+DELETE /api/keys/{id}?password=your_password
+```
+
+### 会话管理
+
+```bash
+# 列出所有会话
+GET /api/sessions
+
+# 创建新会话
+POST /api/sessions
+
+# 获取会话历史
+GET /api/sessions/{id}/messages
+
+# 删除会话
+DELETE /api/sessions/{id}
+```
+
+### 其他端点
+
+```bash
+# 获取状态
+GET /api/status
+
+# 重载配置
+POST /api/config/reload
+
+# 健康检查
+GET /health
+
+# 获取版本信息
+GET /api/version
+
+# 列出模型
+GET /v1/models
+```
+
+## ⚙️ 配置详解
+
+### 完整配置项
+
+```json
+{
+  "server": {
+    "host": "0.0.0.0", // 监听地址
+    "port": 8000, // 监听端口
+    "workers": 4, // Worker 进程数（多进程模式）
+    "log_level": "INFO", // 日志级别：DEBUG/INFO/WARNING/ERROR
+    "reload": false // 开发模式自动重载
+  },
+  "proxy": {
+    "enabled": true, // 是否启用代理
+    "url": "socks5h://127.0.0.1:10808", // 代理地址（支持 http/socks5/socks5h）
+    "timeout": 30 // 代理超时（秒）
+  },
+  "session": {
+    // Gemini 会话配置 - 登录后自动填充
+    "secure_c_ses": "", // Google Cookie
+    "host_c_oses": "", // Google Cookie
+    "nid": "", // Google Cookie
+    "csesidx": "", // 会话索引
+    "group_id": "", // 工作区 ID
+    "project_id": "", // 项目 ID（用于图片下载）
+    "cookies_saved_at": "", // Cookie 保存时间
+    "cookie_raw": "", // 原始 Cookie
+    "cookie_profile_dir": "" // 浏览器配置目录（用于复用会话）
+  },
+  "browser_keep_alive": {
+    "enabled": false, // 是否启用浏览器保活（定期刷新 Cookie）
+    "interval_minutes": 60, // 保活间隔（分钟）
+    "headless": true // 是否无头模式
+  },
+  "remote_browser": {
+    "headless": true // 远程登录浏览器是否无头模式
+  },
+  "security": {
+    "admin_password": "", // 管理密码（用于 API Key 管理）
+    "require_api_key": false // 是否要求第三方客户端使用 API Key
+  },
+  "redis": {
+    "enabled": false, // 是否启用 Redis（多 worker 状态共享）
+    "host": "127.0.0.1", // Redis 地址
+    "port": 6379, // Redis 端口
+    "password": "", // Redis 密码
+    "db": 0, // Redis 数据库编号
+    "key_prefix": "gemini_chat:" // Redis key 前缀
+  }
+}
+```
+
+### 环境变量
 
 除了 `config.json`，还可以通过环境变量配置（优先级更高）：
 
@@ -297,107 +489,125 @@ export SERVER_LOG_LEVEL=INFO
 # 代理配置
 export PROXY_URL=socks5h://127.0.0.1:10808
 
-# 会话配置（通常不需要手动设置）
-export BIZ_GEMINI_SECURE_C_SES=...
-export BIZ_GEMINI_GROUP_ID=...
+# 会话配置（通常由登录自动填充）
+export BIZ_GEMINI_SECURE_C_SES=xxx
+export BIZ_GEMINI_GROUP_ID=xxx
+
+# 安全配置
+export ADMIN_PASSWORD=your_password
+export REQUIRE_API_KEY=true
+
+# Redis 配置
+export REDIS_ENABLED=true
+export REDIS_HOST=127.0.0.1
+export REDIS_PORT=6379
 ```
 
-或使用 `.env` 文件（复制 `.env.example` 为 `.env`）：
+或使用 `.env` 文件：
 
 ```bash
 cp .env.example .env
 vim .env
 ```
 
-## 配置热重载
+### 配置热重载
 
-服务支持配置热重载，修改 `config.json` 后：
+服务支持配置热重载，修改 `config.json` 后会自动生效。
 
-**自动重载**（推荐）:
+**自动重载**（推荐）：
 
-- 保存文件后会自动检测并重载配置
-- 新配置会在下次请求时生效
+- 保存文件后自动检测并重载
+- 新配置在下次请求时生效
 
-**手动重载**:
+**手动重载**：
 
 ```bash
 # Linux/Mac
 ./manage.sh reload
 
-# Windows（不支持热重载，需要重启）
+# Windows（需要重启）
 manage.bat restart
 
 # 或通过 API
 curl -X POST http://localhost:8000/api/config/reload
 ```
 
-## Linux 环境 Web 端登录
+## 🖥️ Web 界面
 
-在 Linux 服务器（无桌面环境）上，可以通过 Web 界面完成登录：
+访问 http://localhost:8000 可以使用 Web 界面：
+
+### 功能特性
+
+- 💬 **聊天对话** - 类似 ChatGPT 的对话界面
+- 📝 **多会话管理** - 创建、切换、删除多个对话
+- 🎨 **Markdown 渲染** - 支持代码高亮、数学公式
+- 🖼️ **图片生成** - Gemini 图片生成和查看
+- 🌓 **深色模式** - 自动跟随系统或手动切换
+- 📱 **响应式设计** - 支持桌面和移动设备
+- 🔑 **API Key 管理** - Web 界面管理 API Key
+
+### 远程浏览器登录
+
+在无图形界面的服务器上：
 
 1. 访问 Web 界面
-2. 点击"重新登录"按钮
-3. 后台会启动 headless 浏览器
-4. 按提示完成登录流程
-5. 登录成功后会自动更新配置
-6. 如果 Cookie 失效，页面会自动弹出远程浏览器并尽量复用上一次保存的 `cookie_profile_dir`，直接在弹出的画面里选择账号完成登录即可。
+2. 点击左下角状态指示器
+3. 选择"远程浏览器"标签
+4. 点击"启动浏览器"
+5. 在页面中完成 Google 登录
+6. 登录成功后点击"保存配置"
 
-或通过 API：
+## 🔧 故障排除
+
+### 1. 依赖安装问题
+
+**SOCKS 代理依赖缺失**：
 
 ```bash
-# 启动登录（headless 模式）
-curl -X POST http://localhost:8000/api/login/start?headless=true
-
-# 查询登录状态
-curl http://localhost:8000/api/login/status
+ERROR: Could not install packages due to an OSError: Missing dependencies for SOCKS support.
 ```
 
-## 日志
-
-日志文件位于 `log/` 目录：
-
-- `access.log` - 访问日志
-- `error.log` - 错误日志
-
-查看实时日志：
+解决方法：
 
 ```bash
-# Linux/Mac
-./manage.sh logs [access|error]
-
-# Windows
-manage.bat logs [access|error]
-
-# 或直接查看文件
-tail -f log/error.log
-```
-
-## 故障排除
-
-### 1. 启动失败
-
-检查依赖是否完整：
-
-```bash
+# 临时禁用代理安装
+unset all_proxy ALL_PROXY http_proxy https_proxy
+pip install pysocks
 pip install -r requirements.txt
-playwright install chromium chrome
 ```
 
-查看错误日志：
+或使用国内镜像：
 
 ```bash
-cat log/error.log
+pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
-### 2. 登录失败
+**Playwright 依赖安装**：
 
-- 检查代理是否正常运行
-- 确保浏览器驱动已安装：`playwright install chromium chrome`
-- 查看详细错误信息
+```bash
+# 先安装系统依赖
+playwright install-deps
+
+# 再安装浏览器
+playwright install chromium chrome
+
+# 验证安装
+python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(); print('OK'); b.close(); p.stop()"
+```
+
+### 2. Cookie/Session 过期
+
+Google Business Gemini 的 Cookie 大约 24 小时过期。
+
+**重新登录**：
+
+- Web 界面：点击"登录"按钮
+- 命令行：`python app.py login`
+- API：`POST /api/login/start`
 
 ### 3. 代理问题
 
-编辑 `config.json`，设置 `proxy.enabled` 为 `false` 以禁用代理：
+如果代理导致连接问题，可以临时禁用：
 
 ```json
 {
@@ -407,144 +617,148 @@ cat log/error.log
 }
 ```
 
-### 4. 配置重载不生效
+### 4. Docker 浏览器问题
 
-Linux/Mac 使用 `./manage.sh reload`，Windows 需要重启服务。
-
-### 5. Playwright 依赖安装失败
-
-运行 `playwright install chromium --with-deps` 可能会报错：
-
-```
-E: Package 'libasound2' has no installation candidate
-```
-
-**原因**：较新的 Linux 发行版（如 Ubuntu 24.04、Debian 13+）中部分包名发生了变化。
-
-**解决方案**：手动安装依赖后再安装浏览器：
+如果远程浏览器连接后立即断开，添加共享内存参数：
 
 ```bash
-# 安装依赖，如果还有报错，根据提示安装缺失的包
-playwright install-deps
-
-# Debian/Ubuntu 系列
-apt install -y libnss3 libnspr4 libxcomposite1 libxdamage1 \
-    libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 libcairo2
-
-# 如果上述命令失败，尝试使用 t64 后缀版本（适用于较新系统）
-apt install -y libnss3 libnspr4 libatk1.0-0t64 libatk-bridge2.0-0t64 \
-    libcups2t64 libatspi2.0-0t64 libxcomposite1 libxdamage1 \
-    libxfixes3 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2t64
-
-# RHEL/CentOS/Fedora 系列
-dnf install -y nss nspr atk at-spi2-atk cups-libs libXcomposite \
-    libXdamage libXfixes libXrandr mesa-libgbm pango cairo alsa-lib
-
-# 然后安装浏览器（不带 --with-deps）
-playwright install chromium chrome
+docker run --shm-size=1g ...
+# 或
+docker run --ipc=host ...
 ```
 
-验证安装是否成功：
+### 5. 多 Worker 状态不同步
+
+如果使用多个 Worker（`workers > 1`），建议启用 Redis：
+
+```json
+{
+  "redis": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 6379
+  }
+}
+```
+
+## 🏭 生产部署建议
+
+### 1. 进程管理
+
+**使用 systemd**（Linux）：
 
 ```bash
-python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(headless=True); print('OK'); b.close(); p.stop()"
+# 创建服务文件
+sudo vim /etc/systemd/system/gemini-chat.service
 ```
 
-### 6. Cookie/Session 过期
+```ini
+[Unit]
+Description=Gemini Chat Service
+After=network.target
 
-Google Business Gemini 的 Cookie 大约 24 小时过期。当出现以下错误时需要重新登录：
+[Service]
+Type=simple
+User=your_user
+WorkingDirectory=/path/to/gemini-chat
+Environment="PATH=/path/to/gemini-chat/venv/bin"
+ExecStart=/path/to/gemini-chat/venv/bin/python server.py
+Restart=always
 
+[Install]
+WantedBy=multi-user.target
 ```
-Session has expired
-HTTP 401
-```
-
-**重新登录方法**：
-
-**方式 A：远程浏览器登录（推荐）**
-
-1. 打开 Web 界面
-2. 点击左下角状态指示器
-3. 选择"远程浏览器"标签，点击"启动浏览器"
-4. 在页面上点击/输入完成 Google 登录
-5. 登录成功后点击"保存配置"
-
-**方式 B：手动输入 Cookie**
-
-1. 在本地有图形界面的电脑上运行 `python app.py login`
-2. 登录成功后，复制 `config.json` 中的 `session` 部分
-3. 在 Web 界面选择"手动输入"标签，粘贴相关信息
-
-**方式 C：命令行登录（需要图形界面）**
 
 ```bash
-python app.py login
+# 启用并启动
+sudo systemctl enable gemini-chat
+sudo systemctl start gemini-chat
+sudo systemctl status gemini-chat
 ```
 
-### 7. Google 提示“此浏览器或应用可能不安全”
+### 2. 反向代理
 
-- 已将远程浏览器改为 headful Chrome 渠道启动，并移除了自动化特征；如仍被拦截可检查：
-  - 确认已安装 Chrome 浏览器：`playwright install chrome`（Docker 镜像已预装）
-- 如前端提供“使用上次浏览器/复用配置”选项，建议开启以复用已保存的 `cookie_profile_dir`，降低二次验证概率
-  - Docker 环境建议增加 `--shm-size=1g`/`--ipc=host`，避免浏览器异常退出被 Google 判定风险
-  - 如果使用自建代理，确认出口 IP 未被 Google 风控
+**Nginx 配置示例**：
 
-### 8. 远程浏览器连接后立即断开
+```nginx
+server {
+    listen 80;
+    server_name your-domain.com;
 
-如果 WebSocket 连接后立即断开（日志显示 `connection open` 后马上 `connection closed`），通常是 Playwright 浏览器启动失败。
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 
-检查步骤：
+        # WebSocket 支持
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+```
 
-1. 确认 Chromium 已安装：`playwright install chromium chrome`
-2. 检查系统依赖是否完整（见上方 Ubuntu 24.04 部分）
-3. 手动测试浏览器启动：
-   ```bash
-   python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); b = p.chromium.launch(headless=True); print('OK'); b.close(); p.stop()"
-   ```
+### 3. SSL/TLS
 
-## 开发模式
+```bash
+# 使用 Certbot 申请证书
+sudo certbot --nginx -d your-domain.com
+```
+
+### 4. 日志轮转
+
+```bash
+# 创建 logrotate 配置
+sudo vim /etc/logrotate.d/gemini-chat
+```
+
+```
+/path/to/gemini-chat/log/*.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+}
+```
+
+### 5. 监控
+
+- 使用 Prometheus + Grafana 监控
+- 配置健康检查：`GET /health`
+- 设置告警规则
+
+## 👨‍💻 开发模式
 
 直接运行服务（用于开发和调试）：
 
 ```bash
+# 方式 1：直接运行
 python server.py
-# 或
+
+# 方式 2：使用 uvicorn（支持热重载）
 uvicorn server:app --reload --host 0.0.0.0 --port 8000
+
+# 方式 3：使用 Gunicorn
+gunicorn server:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
 ```
-
-## 生产部署建议
-
-1. **使用 Gunicorn**（推荐）
-
-   - 脚本会自动使用 Gunicorn 如果已安装
-   - 多 worker 支持，提高并发性能
-
-2. **反向代理**
-
-   - 建议使用 Nginx 作为反向代理
-   - 配置 SSL/TLS 证书
-
-3. **进程管理**
-
-   - Linux 可使用 systemd 管理服务
-   - 或使用 supervisor
-
-4. **日志轮转**
-
-   - 配置 logrotate 防止日志文件过大
-
-5. **监控**
-   - 使用 Prometheus + Grafana 监控服务状态
-   - 配置告警规则
 
 ## 🌟 Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=ccpopy/gemini-chat&type=date&legend=top-left)](https://www.star-history.com/#ccpopy/gemini-chat&type=date&legend=top-left)
 
-## 许可证
+## 📄 许可证
 
 MIT License
 
-## 支持
+## 💬 支持
 
-如有问题，请提交 Issue 或联系开发者。
+- 提交 Issue: https://github.com/ccpopy/gemini-chat/issues
+- 查看文档: https://github.com/ccpopy/gemini-chat
+- Star 项目支持我们 ⭐
+
+---
+
+**开发者**: [ccpopy](https://github.com/ccpopy)

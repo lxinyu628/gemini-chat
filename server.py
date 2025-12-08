@@ -1880,6 +1880,81 @@ async def _chat_completions_handler(
             raise HTTPException(status_code=500, detail=str(e))
 
 
+def verify_request_auth(
+    authorization: Optional[str],
+    config: dict,
+    raise_on_failure: bool = True
+) -> tuple[bool, Optional[str]]:
+    """智能验证请求身份 - 支持 Cookie 和 API Key 双模式
+    
+    验证优先级：
+    1. Cookie 验证：检查配置中是否已有有效的 Gemini Cookie (secure_c_ses, csesidx, group_id)
+       - 如果有效，说明是从已登录的前端网页访问，直接放行
+    2. API Key 验证：如果启用了 require_api_key 且没有有效 Cookie
+       - 检查 Authorization header，验证 API Key
+    
+    Args:
+        authorization: Authorization header 的值
+        config: 当前配置字典
+        raise_on_failure: 验证失败时是否抛出异常（默认 True）
+    
+    Returns:
+        (验证是否通过, 错误消息)
+        
+    Raises:
+        HTTPException: 如果 raise_on_failure=True 且验证失败
+    """
+    security = config.get("security", {})
+    
+    # 第一优先级：检查是否有有效的 Cookie（说明是从前端网页访问）
+    # 如果 config 中有这些关键字段，说明用户已经通过网页登录
+    has_valid_cookie = all([
+        config.get("secure_c_ses"),
+        config.get("csesidx"),
+        config.get("group_id")
+    ])
+    
+    if has_valid_cookie:
+        # Cookie 验证通过，无需检查 API Key
+        logger.debug("请求通过 Cookie 验证（前端网页访问）")
+        return True, None
+    
+    # 第二优先级：如果没有 Cookie 且启用了 API Key 验证
+    if security.get("require_api_key", False):
+        # 没有 Authorization header
+        if not authorization:
+            error_msg = "缺少 Authorization header。前端用户请先登录，第三方客户端请提供 API Key"
+            if raise_on_failure:
+                raise HTTPException(status_code=401, detail=error_msg)
+            return False, error_msg
+        
+        # 解析 Bearer token
+        parts = authorization.split(" ", 1)
+        if len(parts) != 2 or parts[0].lower() != "bearer":
+            error_msg = "Authorization 格式错误，应为 Bearer sk-xxx"
+            if raise_on_failure:
+                raise HTTPException(status_code=401, detail=error_msg)
+            return False, error_msg
+        
+        api_key = parts[1]
+        
+        # 验证 API Key
+        if not validate_api_key(api_key):
+            error_msg = "无效的 API Key"
+            if raise_on_failure:
+                raise HTTPException(status_code=401, detail=error_msg)
+            return False, error_msg
+        
+        logger.debug("请求通过 API Key 验证（第三方客户端访问）")
+        return True, None
+    
+    # 如果没有启用 API Key 验证且没有 Cookie，拒绝访问
+    error_msg = "未登录，请先登录或配置 API Key"
+    if raise_on_failure:
+        raise HTTPException(status_code=401, detail=error_msg)
+    return False, error_msg
+
+
 @app.post("/v1/chat/completions", response_model=None)
 async def chat_completions(
     request: ChatRequest,
@@ -1888,20 +1963,15 @@ async def chat_completions(
     authorization: Optional[str] = Header(None, alias="Authorization"),
     response: Response = None,
 ) -> Union[dict, StreamingResponse]:
-    """OpenAI 兼容的聊天接口（保持当前前端行为）。"""
-    # API Key 验证
+    """OpenAI 兼容的聊天接口（支持 Cookie 和 API Key 双模式验证）。
+    
+    验证模式：
+    1. 前端网页访问：通过 Cookie 验证（已登录用户），无需 API Key
+    2. 第三方客户端：通过 API Key 验证（Authorization: Bearer sk-xxx）
+    """
+    # 智能双模式验证
     config = load_config()
-    security = config.get("security", {})
-    if security.get("require_api_key", False):
-        if not authorization:
-            raise HTTPException(status_code=401, detail="缺少 Authorization header")
-        # 解析 Bearer token
-        parts = authorization.split(" ", 1)
-        if len(parts) != 2 or parts[0].lower() != "bearer":
-            raise HTTPException(status_code=401, detail="Authorization 格式错误，应为 Bearer sk-xxx")
-        api_key = parts[1]
-        if not validate_api_key(api_key):
-            raise HTTPException(status_code=401, detail="无效的 API Key")
+    verify_request_auth(authorization, config, raise_on_failure=True)
     
     return await _chat_completions_handler(
         request=request,
@@ -1920,24 +1990,19 @@ async def chat_completions_strict(
     authorization: Optional[str] = Header(None, alias="Authorization"),
     response: Response = None,
 ) -> Union[dict, StreamingResponse]:
-    """严格遵循 OpenAI Chat Completions 协议的接口。
+    """严格遵循 OpenAI Chat Completions 协议的接口（支持 Cookie 和 API Key 双模式验证）。
 
     - 不返回自定义字段（images/thoughts/final_metadata/session_id）
     - 会话信息通过响应头 X-Session-Id / X-Session-Name 传递
     - 适配 ChatWebUI / Lobe Chat 等严格校验第三方前端
+    
+    验证模式：
+    1. 前端网页访问：通过 Cookie 验证（已登录用户），无需 API Key
+    2. 第三方客户端：通过 API Key 验证（Authorization: Bearer sk-xxx）
     """
-    # API Key 验证
+    # 智能双模式验证
     config = load_config()
-    security = config.get("security", {})
-    if security.get("require_api_key", False):
-        if not authorization:
-            raise HTTPException(status_code=401, detail="缺少 Authorization header")
-        parts = authorization.split(" ", 1)
-        if len(parts) != 2 or parts[0].lower() != "bearer":
-            raise HTTPException(status_code=401, detail="Authorization 格式错误，应为 Bearer sk-xxx")
-        api_key = parts[1]
-        if not validate_api_key(api_key):
-            raise HTTPException(status_code=401, detail="无效的 API Key")
+    verify_request_auth(authorization, config, raise_on_failure=True)
     
     return await _chat_completions_handler(
         request=request,

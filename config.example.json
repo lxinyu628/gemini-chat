@@ -43,9 +43,9 @@
     "headless": true
   },
   "security": {
-    "_comment": "安全配置 - API Key 管理",
+    "_comment": "安全配置 - 智能双模式验证",
     "_comment_admin_password": "管理密码（明文存储），用于保护 API Key 管理界面",
-    "_comment_require_api_key": "是否要求 API Key 验证，设为 true 后调用 /v1/chat/completions 需要 Authorization: Bearer sk-xxx",
+    "_comment_require_api_key": "是否要求第三方客户端使用 API Key。设为 true 后：① 网页前端仍可通过 Cookie 登录访问（无需 API Key）；② 第三方客户端（Cherry Studio、Lobe Chat 等）需提供 Authorization: Bearer sk-xxx",
     "admin_password": "",
     "require_api_key": false
   },
