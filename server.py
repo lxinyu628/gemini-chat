@@ -927,17 +927,8 @@ async def list_sessions() -> list:
         config = load_config()
         missing = [k for k in ("secure_c_ses", "csesidx", "group_id") if not config.get(k)]
         if missing:
-            # 未登录时返回本地缓存的会话
-            result = []
-            for sid, data in sessions.items():
-                result.append({
-                    "session_id": sid,
-                    "title": data.get("title", "新对话"),
-                    "created_at": data.get("created_at", 0),
-                    "message_count": len(data.get("messages", [])),
-                })
-            result.sort(key=lambda x: x["created_at"], reverse=True)
-            return result
+            # 未登录时直接返回空列表
+            return []
 
         jwt_manager = JWTManager(config=config)
         biz_client = BizGeminiClient(config, jwt_manager)
