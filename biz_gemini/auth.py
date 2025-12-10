@@ -462,7 +462,8 @@ def request_getoxsrf(config: Optional[dict] = None, allow_minimal_retry: bool = 
             location = resp.headers.get("location", "")
             if "refreshcookies" in location.lower():
                 logger.info("检测到 refreshcookies 重定向，尝试跟随")
-                resp_refresh = client.get(location, headers=headers_base, follow_redirects=True)
+                # 重要：refreshcookies 请求也需要携带 Cookie
+                resp_refresh = client.get(location, headers=headers, follow_redirects=True)
                 if resp_refresh.status_code in (200, 204, 302, 303):
                     resp = client.get(url, headers=headers)
                 else:
