@@ -426,14 +426,13 @@ def request_getoxsrf(config: Optional[dict] = None, allow_minimal_retry: bool = 
     # 使用 _build_cookie_header 构造 Cookie（优先使用 cookie_raw）
     cookie_str, cookie_debug = _build_cookie_header(config)
 
-    # 精简版 cookie，避免携带无关字段触发 refreshcookies
+    # 精简版 cookie，只使用核心认证 Cookie
     minimal_cookie_str = None
     if secure_c_ses:
         minimal_cookie_str = f"__Secure-C_SES={secure_c_ses}"
         if config.get("host_c_oses"):
             minimal_cookie_str += f"; __Host-C_OSES={config['host_c_oses']}"
-        if config.get("nid"):
-            minimal_cookie_str += f"; NID={config['nid']}"
+        # 注意：不包含 NID，因为它可能触发 refreshcookies
 
     url = f"{GETOXSRF_URL}?csesidx={csesidx}"
 
@@ -497,24 +496,26 @@ def request_getoxsrf(config: Optional[dict] = None, allow_minimal_retry: bool = 
                     logger.warning(f"refreshcookies 请求失败: HTTP {resp_refresh.status_code}")
         return resp
 
-    used_cookie_header = cookie_str
-    used_variant = cookie_debug.get("cookie_source", "cookie_raw")
+    used_cookie_header = minimal_cookie_str if minimal_cookie_str else cookie_str
+    used_variant = "minimal" if minimal_cookie_str else cookie_debug.get("cookie_source", "cookie_raw")
 
     with httpx.Client(**client_kwargs) as client:
-        resp = _send_with_refresh(client, cookie_str)
+        # 优先使用精简 Cookie
+        resp = _send_with_refresh(client, used_cookie_header)
 
-        # 若仍是 302，尝试精简 cookie
+        # 若精简 Cookie 仍是 302，尝试完整 cookie_raw（作为备用）
         if (
             allow_minimal_retry
             and resp.status_code == 302
-            and minimal_cookie_str
-            and minimal_cookie_str != cookie_str
+            and cookie_str
+            and cookie_str != used_cookie_header
         ):
-            logger.info("getoxsrf 返回 302，改用精简 cookie 再试")
-            alt_resp = _send_with_refresh(client, minimal_cookie_str)
-            resp = alt_resp
-            used_cookie_header = minimal_cookie_str
-            used_variant = "minimal"
+            logger.info("getoxsrf 精简 cookie 返回 302，改用完整 cookie_raw 再试")
+            alt_resp = _send_with_refresh(client, cookie_str)
+            if alt_resp.status_code != 302:
+                resp = alt_resp
+                used_cookie_header = cookie_str
+                used_variant = cookie_debug.get("cookie_source", "cookie_raw")
 
     debug_info = {
         "cookie_source": cookie_debug.get("cookie_source"),
