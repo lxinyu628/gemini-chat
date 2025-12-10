@@ -52,6 +52,7 @@ class RemoteBrowserSession:
         self._context: Optional[BrowserContext] = None
         self._page: Optional[Page] = None
         self._screenshot_task: Optional[asyncio.Task] = None
+        self._verification_task: Optional[asyncio.Task] = None  # 验证码获取任务
         self._subscribers: list[Callable] = []
         self._login_config: Optional[dict] = None
 
@@ -252,11 +253,17 @@ class RemoteBrowserSession:
         # 检测是否在验证码页面
         if self._is_verification_page(url):
             logger.info("检测到验证码页面，准备自动获取验证码...")
-            asyncio.create_task(self._handle_verification_page())
+            # 取消之前的验证码任务（如果有）
+            self._cancel_verification_task()
+            # 启动新的验证码任务
+            self._verification_task = asyncio.create_task(self._handle_verification_page())
             return
 
         # 检测是否已登录到主页
         if self._is_main_page(url):
+            # 取消验证码任务（登录成功了）
+            self._cancel_verification_task()
+            
             # 如果已经登录成功但凭证不完整，检查新 URL 是否包含 group_id
             if self.status == BrowserSessionStatus.LOGIN_SUCCESS and self._login_config is None:
                 # 凭证不完整，检查新 URL 是否有 group_id
@@ -274,6 +281,13 @@ class RemoteBrowserSession:
             "/signin/v2/challenge",
         ]
         return any(indicator in url for indicator in verification_indicators)
+
+    def _cancel_verification_task(self):
+        """取消验证码获取任务"""
+        if self._verification_task and not self._verification_task.done():
+            logger.info("[验证码] 取消验证码获取任务")
+            self._verification_task.cancel()
+            self._verification_task = None
 
     async def _handle_verification_page(self) -> None:
         """处理验证码页面 - 从 IMAP 获取验证码并自动填充"""
@@ -324,62 +338,149 @@ class RemoteBrowserSession:
             await self._notify_status()
 
     async def _fill_verification_code(self, code: str) -> None:
-        """自动填充验证码"""
+        """自动填充验证码
+        
+        Google 验证码输入是一个特殊组件：
+        - 有一个隐藏的 input (opacity: 0) 来接收键盘输入
+        - 每个字符显示在单独的 span 元素中
+        - fill() 方法不适用，需要使用键盘直接输入
+        """
         try:
-            # 常见的验证码输入框选择器
+            logger.info(f"[验证码] 准备填充验证码: {code}")
+            
+            # Google 验证码输入框的选择器
+            google_pin_selector = 'input[name="pinInput"]'
+            
+            # 等待页面加载，最多等待 5 秒
+            pin_input = None
+            for attempt in range(10):
+                try:
+                    pin_input = await self._page.query_selector(google_pin_selector)
+                    if pin_input:
+                        break
+                    logger.debug(f"[验证码] 等待输入框加载... ({attempt + 1}/10)")
+                    await asyncio.sleep(0.5)
+                except Exception as e:
+                    logger.debug(f"[验证码] 等待中出错: {e}")
+                    await asyncio.sleep(0.5)
+            
+            if pin_input:
+                logger.info(f"[验证码] 找到 Google 风格验证码输入框")
+                
+                # 点击输入框获取焦点
+                await pin_input.click()
+                await asyncio.sleep(0.3)
+                
+                # 清空现有内容（按 Backspace 多次）
+                for _ in range(6):
+                    await self._page.keyboard.press("Backspace")
+                await asyncio.sleep(0.1)
+                
+                # 使用键盘直接输入（不能用 fill，必须用 type）
+                await self._page.keyboard.type(code)
+                logger.info(f"[验证码] 已使用键盘输入: {code}")
+                
+                # 等待页面响应
+                await asyncio.sleep(0.5)
+                
+                # 验证输入结果（检查 span 元素中的字符）
+                # 注意：如果验证成功页面会跳转，这里可能会失败，这是正常的
+                try:
+                    chars = await self._page.query_selector_all('span.hLMukf')
+                    if chars:
+                        filled_chars = []
+                        for char_elem in chars:
+                            text = await char_elem.text_content()
+                            filled_chars.append(text or '')
+                        filled_value = ''.join(filled_chars)
+                        logger.info(f"[验证码] 验证 - span 显示的字符: {filled_value}")
+                        
+                        if filled_value == code:
+                            logger.info(f"[验证码] ✓ 验证码填充成功")
+                        elif filled_value:
+                            logger.warning(f"[验证码] 验证码可能填充不完整: 期望 {code}, 实际 {filled_value}")
+                        # 如果 filled_value 为空，可能是页面已跳转，不报警
+                    else:
+                        logger.debug("[验证码] span 元素不存在，可能页面已跳转（验证成功）")
+                except Exception as e:
+                    # 页面可能已经跳转了（验证成功），忽略错误
+                    logger.debug(f"[验证码] 验证检查时出错（可能页面已跳转）: {e}")
+                
+                self.message = f"验证码 {code} 已填充"
+                await self._notify_status()
+                
+                # 尝试自动提交（可能页面已经自动跳转了）
+                try:
+                    await self._auto_submit_verification()
+                except Exception as e:
+                    logger.debug(f"[验证码] 自动提交时出错（可能页面已跳转）: {e}")
+                return
+            
+            # 回退：尝试普通输入框
+            logger.info("[验证码] 未找到 Google 风格输入框，尝试普通输入框")
             input_selectors = [
                 'input[type="text"]',
                 'input[name="code"]',
                 'input[name="pin"]',
                 'input[aria-label*="code"]',
-                'input[aria-label*="验证"]',
-                'input[placeholder*="code"]',
-                'input[placeholder*="验证"]',
             ]
             
             for selector in input_selectors:
                 try:
                     input_element = await self._page.query_selector(selector)
                     if input_element:
-                        # 清空并填充验证码
+                        logger.info(f"[验证码] 找到输入框: {selector}")
+                        
                         await input_element.click()
-                        await input_element.fill("")
-                        await input_element.type(code, delay=50)
-                        logger.info(f"验证码已填充到 {selector}")
+                        await asyncio.sleep(0.1)
+                        
+                        # 对于普通输入框，使用 keyboard.type
+                        for _ in range(10):
+                            await self._page.keyboard.press("Backspace")
+                        await self._page.keyboard.type(code)
+                        
+                        logger.info(f"[验证码] 已输入验证码")
                         
                         self.message = f"验证码 {code} 已填充，请点击继续或等待自动提交"
                         await self._notify_status()
                         
-                        # 尝试自动提交
-                        await asyncio.sleep(1)
-                        submit_selectors = [
-                            'button[type="submit"]',
-                            'button:has-text("Next")',
-                            'button:has-text("下一步")',
-                            'button:has-text("Verify")',
-                            'button:has-text("验证")',
-                        ]
-                        for submit_selector in submit_selectors:
-                            try:
-                                submit_btn = await self._page.query_selector(submit_selector)
-                                if submit_btn:
-                                    await submit_btn.click()
-                                    logger.info("已点击提交按钮")
-                                    break
-                            except Exception:
-                                continue
+                        await self._auto_submit_verification()
                         return
-                except Exception:
+                except Exception as e:
+                    logger.debug(f"[验证码] 选择器 {selector} 失败: {e}")
                     continue
             
-            logger.warning("未找到验证码输入框")
+            logger.warning("[验证码] 未找到验证码输入框")
             self.message = f"验证码 {code} 已获取，但未找到输入框，请手动输入"
             await self._notify_status()
             
         except Exception as e:
-            logger.error(f"填充验证码失败: {e}")
+            logger.error(f"[验证码] 填充验证码失败: {e}")
             self.message = f"自动填充失败: {str(e)}，请手动输入验证码: {code}"
             await self._notify_status()
+
+    async def _auto_submit_verification(self) -> None:
+        """尝试自动提交验证码"""
+        try:
+            await asyncio.sleep(1)
+            submit_selectors = [
+                'button[type="submit"]',
+                'button:has-text("Next")',
+                'button:has-text("下一步")',
+                'button:has-text("Verify")',
+                'button:has-text("验证")',
+            ]
+            for submit_selector in submit_selectors:
+                try:
+                    submit_btn = await self._page.query_selector(submit_selector)
+                    if submit_btn:
+                        await submit_btn.click()
+                        logger.info("[验证码] 已点击提交按钮")
+                        return
+                except Exception:
+                    continue
+        except Exception as e:
+            logger.debug(f"[验证码] 自动提交失败: {e}")
 
     def _is_main_page(self, url: str) -> bool:
         """判断是否已到达主页面（登录成功）"""
@@ -557,6 +658,17 @@ class RemoteBrowserSession:
                     "type": "login_success",
                     "config": self._login_config,
                 })
+
+                # 尝试获取并保存 username（供自动登录使用）
+                try:
+                    from .auth import check_session_status
+                    session_status = check_session_status(self._login_config)
+                    username = session_status.get("username")
+                    if username:
+                        self._login_config["username"] = username
+                        logger.info(f"获取到用户邮箱: {username}")
+                except Exception as e:
+                    logger.warning(f"获取用户邮箱失败: {e}")
             else:
                 # 凭证不完整，提供详细提示
                 missing = []

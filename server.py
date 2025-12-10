@@ -477,6 +477,14 @@ async def get_status() -> dict:
             except Exception:
                 pass
             mark_cookie_valid()
+            
+            # 保存 username 到 config.json（供自动登录使用）
+            username = session_status.get("username")
+            if username:
+                try:
+                    save_config({"session": {"username": username}})
+                except Exception:
+                    pass
         elif session_status.get("expired", False):
             mark_cookie_expired("session check expired")
 
@@ -2980,11 +2988,25 @@ async def refresh_cookie(headless: bool = True) -> dict:
             "needs_manual_login": bool,  # 是否需要手动登录
         }
     """
+    import asyncio
+    
     try:
-        result = await try_refresh_cookie_via_browser(headless=headless)
+        # 添加 5 分钟超时保护，防止服务器挂起
+        result = await asyncio.wait_for(
+            try_refresh_cookie_via_browser(headless=headless),
+            timeout=300  # 5 分钟
+        )
         return result
+    except asyncio.TimeoutError:
+        logger.error("刷新 Cookie 超时（5分钟）")
+        return {
+            "success": False,
+            "message": "刷新 Cookie 超时（5分钟），请检查网络或手动登录",
+            "needs_manual_login": True,
+        }
     except Exception as e:
-        logger.error(f"刷新 Cookie 失败: {e}")
+        import traceback
+        logger.error(f"刷新 Cookie 失败: {e}\n{traceback.format_exc()}")
         return {
             "success": False,
             "message": str(e),

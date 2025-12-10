@@ -2031,9 +2031,8 @@ function autoStartBrowserLogin () {
   if (state.autoBrowserStarted || browserState.connected) return;
   state.autoBrowserStarted = true;
 
-  // 优先使用后端返回的 accountChooserUrl（包含正确的 group_id 和 csesidx）
-  // 如果没有（首次登录），直接访问 business.gemini.google 让 Google 处理登录流程
-  const startUrl = state.accountChooserUrl || 'https://business.gemini.google/';
+  // 总是使用官网地址，避免使用旧账号的 accountChooserUrl 导致切换账号时跳转错误
+  const startUrl = 'https://business.gemini.google/';
 
   startBrowser({ useProfile: true, startUrl, auto: true });
 }
@@ -2055,8 +2054,11 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     const tabName = btn.dataset.tab;
 
-    // 更新按钮状态
-    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    // 如果没有 data-tab 属性（如 IMAP 按钮），跳过 tab 切换逻辑
+    if (!tabName) return;
+
+    // 更新按钮状态（只更新有 data-tab 的按钮）
+    document.querySelectorAll('.tab-btn[data-tab]').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
 
     // 更新内容
@@ -2076,13 +2078,8 @@ document.getElementById('saveManualBtn').addEventListener('click', saveManualCon
 
 async function startBrowser (options = {}) {
   const { useProfile = false, auto = false } = options || {};
-  let { startUrl = null } = options || {};
-
-  // 优先使用后端返回的 accountChooserUrl（包含正确的 group_id 和 csesidx，用于 session 复用）
-  // 如果没有（首次登录），直接访问 business.gemini.google 让 Google 处理登录流程
-  if (!startUrl) {
-    startUrl = state.accountChooserUrl || 'https://business.gemini.google/';
-  }
+  // 始终使用官网地址，避免使用旧账号信息导致切换账号时跳转错误
+  const startUrl = 'https://business.gemini.google/';
 
   if (browserState.connected) return;
 

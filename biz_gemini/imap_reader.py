@@ -72,21 +72,27 @@ class IMAPReader:
     def _connect_sync(self) -> Optional[imaplib.IMAP4_SSL]:
         """同步连接 IMAP（在线程池中执行）"""
         try:
+            logger.debug(f"[IMAP] 连接参数: host={self.host}, port={self.port}, ssl={self.use_ssl}, user={self.user}")
             if self.use_ssl:
                 conn = imaplib.IMAP4_SSL(self.host, self.port, timeout=30)
             else:
                 conn = imaplib.IMAP4(self.host, self.port)
                 conn.starttls()
 
+            logger.debug(f"[IMAP] 正在登录用户: {self.user}")
             conn.login(self.user, self.password)
-            conn.select(self.folder)
+            logger.debug(f"[IMAP] 登录成功，正在选择文件夹: {self.folder}")
+            status, data = conn.select(self.folder)
+            logger.info(f"[IMAP] 文件夹 '{self.folder}' 已选中，包含 {data[0].decode()} 封邮件")
             return conn
 
         except imaplib.IMAP4.error as e:
-            logger.error(f"IMAP 认证失败: {e}")
+            logger.error(f"[IMAP] 认证失败: {e}")
             return None
         except Exception as e:
-            logger.error(f"IMAP 连接异常: {e}")
+            logger.error(f"[IMAP] 连接异常: {e}")
+            import traceback
+            logger.debug(f"[IMAP] 异常详情:\n{traceback.format_exc()}")
             return None
 
     async def close(self):
@@ -144,6 +150,7 @@ class IMAPReader:
         """同步获取验证码（在线程池中执行）"""
         try:
             # 刷新邮箱以获取最新邮件
+            logger.debug("[IMAP] 正在刷新邮箱 (NOOP)...")
             self._connection.noop()
 
             # 计算搜索时间范围
@@ -151,73 +158,211 @@ class IMAPReader:
 
             # 构建搜索条件
             search_criteria = f'(FROM "{self.sender_filter}" SINCE "{since_date}")'
-            logger.debug(f"IMAP 搜索条件: {search_criteria}")
+            logger.info(f"[IMAP] 搜索条件: {search_criteria}")
+            logger.info(f"[IMAP] 搜索范围: 过去 {max_age_seconds} 秒 (自 {since_date})")
 
             status, messages = self._connection.search(None, search_criteria)
+            logger.debug(f"[IMAP] 搜索返回状态: {status}, 结果: {messages}")
 
             if status != "OK" or not messages[0]:
-                logger.debug("未找到符合条件的邮件")
+                logger.info(f"[IMAP] 未找到来自 '{self.sender_filter}' 的邮件")
+                # 尝试列出所有邮件的发件人，帮助调试
+                self._list_recent_senders()
                 return None
 
             # 获取邮件 ID 列表（最新的在后面）
             mail_ids = messages[0].split()
-            logger.debug(f"找到 {len(mail_ids)} 封符合条件的邮件")
+            logger.info(f"[IMAP] ✓ 找到 {len(mail_ids)} 封符合条件的邮件，ID: {[mid.decode() for mid in mail_ids]}")
 
             # 从最新的邮件开始查找
-            for mail_id in reversed(mail_ids):
-                code = self._extract_code_from_mail(mail_id)
+            for i, mail_id in enumerate(reversed(mail_ids)):
+                logger.debug(f"[IMAP] 正在处理第 {i+1}/{len(mail_ids)} 封邮件 (ID: {mail_id.decode()})...")
+                code = self._extract_code_from_mail(mail_id, max_age_seconds)
                 if code:
                     return code
+                elif code is None:
+                    logger.debug(f"[IMAP] 邮件 {mail_id.decode()} 中未找到验证码")
+                # code == False 表示邮件太旧，继续检查下一封
 
+            logger.warning("[IMAP] 已检查所有邮件，均未找到验证码")
             return None
 
         except Exception as e:
-            logger.error(f"搜索邮件失败: {e}")
+            logger.error(f"[IMAP] 搜索邮件失败: {e}")
+            import traceback
+            logger.debug(f"[IMAP] 异常详情:\n{traceback.format_exc()}")
             return None
 
-    def _extract_code_from_mail(self, mail_id: bytes) -> Optional[str]:
-        """从邮件中提取验证码"""
+    def _list_recent_senders(self, limit: int = 10):
+        """列出最近邮件的发件人（用于调试）"""
+        try:
+            since_date = (datetime.now() - timedelta(days=1)).strftime("%d-%b-%Y")
+            status, messages = self._connection.search(None, f'(SINCE "{since_date}")')
+            if status == "OK" and messages[0]:
+                mail_ids = messages[0].split()[-limit:]  # 只取最近的几封
+                logger.info(f"[IMAP] 最近 {len(mail_ids)} 封邮件的发件人:")
+                for mail_id in reversed(mail_ids):
+                    try:
+                        status, data = self._connection.fetch(mail_id, "(BODY[HEADER.FIELDS (FROM SUBJECT DATE)])")
+                        if status == "OK":
+                            header = data[0][1].decode('utf-8', errors='ignore')
+                            # 提取 From 和 Subject
+                            from_match = re.search(r'From:\s*(.+)', header, re.IGNORECASE)
+                            subj_match = re.search(r'Subject:\s*(.+)', header, re.IGNORECASE)
+                            date_match = re.search(r'Date:\s*(.+)', header, re.IGNORECASE)
+                            from_addr = from_match.group(1).strip() if from_match else 'N/A'
+                            subject = subj_match.group(1).strip()[:50] if subj_match else 'N/A'
+                            date_str = date_match.group(1).strip() if date_match else 'N/A'
+                            logger.info(f"  - ID {mail_id.decode()}: FROM={from_addr}")
+                            logger.info(f"    SUBJ={subject}, DATE={date_str}")
+                    except Exception as e:
+                        logger.debug(f"  - 邮件 {mail_id.decode()} 读取失败: {e}")
+        except Exception as e:
+            logger.debug(f"[IMAP] 列出发件人失败: {e}")
+
+    def _extract_code_from_mail(self, mail_id: bytes, max_age_seconds: int = 300):
+        """从邮件中提取验证码
+        
+        Returns:
+            str: 验证码
+            None: 未找到验证码
+            False: 邮件太旧，跳过
+        """
         try:
             status, msg_data = self._connection.fetch(mail_id, "(RFC822)")
             if status != "OK":
+                logger.debug(f"[IMAP] 获取邮件 {mail_id.decode()} 失败，状态: {status}")
                 return None
 
             email_body = msg_data[0][1]
             msg = email.message_from_bytes(email_body)
 
+            # 打印邮件基本信息
+            subject = self._decode_header(msg.get('Subject', 'N/A'))
+            from_addr = self._decode_header(msg.get('From', 'N/A'))
+            date_str = msg.get('Date', 'N/A')
+            logger.info(f"[IMAP] 正在解析邮件:")
+            logger.info(f"  Subject: {subject}")
+            logger.info(f"  From: {from_addr}")
+            logger.info(f"  Date: {date_str}")
+
+            # 检查邮件时间是否在有效范围内
+            mail_time = self._parse_email_date(date_str)
+            if mail_time:
+                # 使用 UTC 时间比较，避免 naive/aware datetime 混用
+                from datetime import timezone
+                now = datetime.now(timezone.utc)
+                # 确保 mail_time 也是 aware datetime
+                if mail_time.tzinfo is None:
+                    mail_time = mail_time.replace(tzinfo=timezone.utc)
+                age_seconds = (now - mail_time).total_seconds()
+                logger.info(f"  Age: {int(age_seconds)} 秒前")
+                if age_seconds > max_age_seconds:
+                    logger.info(f"[IMAP] ⚠ 邮件太旧（{int(age_seconds)}秒 > {max_age_seconds}秒），跳过")
+                    return False  # 返回 False 表示太旧
+            else:
+                logger.warning(f"[IMAP] 无法解析邮件时间: {date_str}")
+
             # 获取邮件正文
             body = self._get_email_body(msg)
             if not body:
+                logger.warning(f"[IMAP] 邮件正文为空")
                 return None
 
+            # 打印正文预览（用于调试）
+            body_preview = body[:500].replace('\n', ' ').replace('\r', '')
+            logger.debug(f"[IMAP] 邮件正文预览 (前 500 字符): {body_preview}")
+            logger.debug(f"[IMAP] 邮件正文总长度: {len(body)} 字符")
+
             # 使用正则表达式提取验证码
+            logger.debug(f"[IMAP] 使用主正则匹配: {self.code_pattern}")
             match = re.search(self.code_pattern, body, re.IGNORECASE)
             if match:
                 code = match.group(1)
-                logger.info(f"从邮件中提取到验证码: {code}")
+                logger.info(f"[IMAP] ✓ 主正则匹配成功，验证码: {code}")
                 return code
+            else:
+                logger.debug("[IMAP] 主正则未匹配")
 
-            # 备用：尝试匹配任何 6 位字母数字组合
-            # 在 HTML 中常见的验证码格式
+            # 备用：尝试匹配 HTML 中常见的验证码格式
+            # 注意：移除了过于宽松的 \b([A-Z0-9]{6})\b 模式，避免误匹配
             backup_patterns = [
-                r'verification-code[^>]*>([A-Z0-9]{6})<',
-                r'code[^>]*>([A-Z0-9]{6})<',
-                r'>([A-Z0-9]{6})</span>',
-                r'\b([A-Z0-9]{6})\b',  # 最后尝试纯文本
+                (r'verification-code[^>]*>([A-Z0-9]{6})<', 'verification-code'),
+                (r'code[^>]*>([A-Z0-9]{6})<', 'code tag'),
+                (r'>([A-Z0-9]{6})</span>', 'span tag'),
+                (r'>\s*([A-Z0-9]{6})\s*</td>', 'td tag'),
+                (r'>\s*([A-Z0-9]{6})\s*</div>', 'div tag'),
             ]
 
-            for pattern in backup_patterns:
+            logger.debug("[IMAP] 尝试备用正则匹配...")
+            for pattern, desc in backup_patterns:
                 match = re.search(pattern, body, re.IGNORECASE)
                 if match:
                     code = match.group(1).upper()
-                    logger.info(f"使用备用模式提取到验证码: {code}")
+                    logger.info(f"[IMAP] ✓ 备用模式 [{desc}] 匹配成功，验证码: {code}")
                     return code
+                else:
+                    logger.debug(f"[IMAP]   模式 [{desc}] 未匹配")
 
+            logger.debug("[IMAP] 所有正则模式均未匹配到验证码")
             return None
 
         except Exception as e:
-            logger.debug(f"解析邮件失败: {e}")
+            logger.error(f"[IMAP] 解析邮件失败: {e}")
+            import traceback
+            logger.debug(f"[IMAP] 异常详情:\n{traceback.format_exc()}")
             return None
+
+    def _decode_header(self, header_value: str) -> str:
+        """解码邮件头"""
+        if not header_value:
+            return 'N/A'
+        try:
+            decoded_parts = decode_header(header_value)
+            result = ''
+            for part, charset in decoded_parts:
+                if isinstance(part, bytes):
+                    result += part.decode(charset or 'utf-8', errors='ignore')
+                else:
+                    result += part
+            return result
+        except Exception:
+            return str(header_value)
+
+    def _parse_email_date(self, date_str: str) -> Optional[datetime]:
+        """解析邮件日期字符串，返回带时区的 datetime"""
+        if not date_str or date_str == 'N/A':
+            return None
+        
+        try:
+            from email.utils import parsedate_to_datetime
+            return parsedate_to_datetime(date_str)
+        except Exception:
+            pass
+        
+        # 备用格式解析
+        from datetime import timezone
+        date_formats = [
+            "%a, %d %b %Y %H:%M:%S %z",
+            "%d %b %Y %H:%M:%S %z",
+            "%a, %d %b %Y %H:%M:%S",
+            "%d %b %Y %H:%M:%S",
+        ]
+        
+        # 移除时区括号部分 (e.g., "(CST)")
+        clean_date = re.sub(r'\s*\([^)]+\)\s*$', '', date_str)
+        
+        for fmt in date_formats:
+            try:
+                dt = datetime.strptime(clean_date, fmt)
+                # 如果没有时区信息，假设为 UTC
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt
+            except ValueError:
+                continue
+        
+        return None
 
     def _get_email_body(self, msg) -> str:
         """获取邮件正文（支持多种格式）"""
@@ -287,7 +432,11 @@ class IMAPReader:
 
             if status_callback:
                 try:
-                    status_callback(f"正在等待验证码邮件... (剩余 {remaining} 秒)")
+                    # 支持同步和异步回调
+                    import asyncio
+                    result = status_callback(f"正在等待验证码邮件... (剩余 {remaining} 秒)")
+                    if asyncio.iscoroutine(result):
+                        await result
                 except Exception:
                     pass
 
@@ -297,7 +446,9 @@ class IMAPReader:
             if code:
                 if status_callback:
                     try:
-                        status_callback(f"已收到验证码 {code}，正在填充...")
+                        result = status_callback(f"已收到验证码 {code}，正在填充...")
+                        if asyncio.iscoroutine(result):
+                            await result
                     except Exception:
                         pass
                 return code

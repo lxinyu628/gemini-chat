@@ -23,6 +23,12 @@ LOGIN_HOSTS = [
     "accounts.google.com",
     "accountverification.business.gemini.google",
 ]
+# 验证码页面特征
+VERIFICATION_INDICATORS = [
+    "accountverification.business.gemini.google",
+    "challenge/",
+    "/signin/v2/challenge",
+]
 
 
 class BrowserKeepAliveService:
@@ -523,10 +529,10 @@ def get_browser_keep_alive_service(
 
 
 async def try_refresh_cookie_via_browser(headless: bool = True) -> dict:
-    """尝试通过浏览器刷新 Cookie（手动触发）
+    """尝试通过浏览器刷新 Cookie（支持自动登录）
 
     这是一个独立的函数，不依赖全局服务实例。
-    用于手动触发 Cookie 刷新。
+    用于手动触发 Cookie 刷新，如果需要登录会尝试自动完成。
 
     Args:
         headless: 是否无头模式
@@ -538,10 +544,17 @@ async def try_refresh_cookie_via_browser(headless: bool = True) -> dict:
             "needs_manual_login": bool,  # 是否需要手动登录
         }
     """
+    import asyncio
     from playwright.async_api import async_playwright
 
     config = load_config()
     proxy = get_proxy(config)
+
+    # 检查是否启用了自动登录和 IMAP
+    imap_config = config.get("imap", {})
+    imap_enabled = imap_config.get("enabled", False)
+    # auto_login 配置在 imap 对象中
+    auto_login_enabled = imap_config.get("auto_login", False)
 
     # Playwright 不支持 socks5h://
     playwright_proxy = proxy
@@ -552,7 +565,9 @@ async def try_refresh_cookie_via_browser(headless: bool = True) -> dict:
     browser = None
 
     try:
+        logger.info("[Cookie刷新] 开始浏览器刷新流程...")
         playwright = await async_playwright().start()
+        logger.info("[Cookie刷新] Playwright 已启动")
 
         # 反检测：使用更真实的浏览器启动参数
         launch_args = [
@@ -578,8 +593,8 @@ async def try_refresh_cookie_via_browser(headless: bool = True) -> dict:
 
         # 反检测：使用更真实的浏览器上下文配置
         context_kwargs = {
-            "viewport": {"width": 1920, "height": 1080},
-            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "viewport": {"width": 1280, "height": 800},
+            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
             "locale": "zh-CN",
             "timezone_id": "Asia/Shanghai",
             "screen": {"width": 1920, "height": 1080},
@@ -606,12 +621,12 @@ async def try_refresh_cookie_via_browser(headless: bool = True) -> dict:
             window.chrome = { runtime: {}, loadTimes: function() {}, csi: function() {}, app: {} };
         """)
 
-        # 先访问目标页面，让浏览器建立域名上下文
+        # 创建页面
         page = await context.new_page()
 
         try:
             # 第一步：先访问页面（可能会重定向到登录页）
-            logger.info("正在访问目标页面...")
+            logger.info("[自动登录] 正在访问目标页面...")
             await page.goto(TARGET_URL, timeout=60000, wait_until="domcontentloaded")
 
             # 第二步：设置 Cookie（在正确的域名上下文中）
@@ -652,81 +667,53 @@ async def try_refresh_cookie_via_browser(headless: bool = True) -> dict:
 
             if cookies:
                 await context.add_cookies(cookies)
-                logger.info(f"已设置 {len(cookies)} 个 Cookie")
+                logger.info(f"[自动登录] 已设置 {len(cookies)} 个 Cookie")
 
             # 第三步：重新访问目标页面（带上 Cookie）
-            logger.info("重新访问目标页面...")
+            logger.info("[自动登录] 重新访问目标页面...")
             await page.goto(TARGET_URL, timeout=60000)
             await page.wait_for_load_state("networkidle", timeout=30000)
 
             current_url = page.url
-            logger.info(f"当前 URL: {current_url}")
+            logger.info(f"[自动登录] 当前 URL: {current_url}")
 
             # 检查是否在登录页
             is_login_page = any(host in current_url for host in LOGIN_HOSTS)
 
             if is_login_page:
-                logger.warning(f"被重定向到登录页: {current_url}")
-                return {
-                    "success": False,
-                    "message": "Cookie 已失效，需要手动登录",
-                    "needs_manual_login": True,
-                }
+                logger.warning(f"[自动登录] 被重定向到登录页: {current_url}")
+                
+                # 如果启用了自动登录和 IMAP，尝试自动完成登录
+                if auto_login_enabled and imap_enabled:
+                    logger.info("[自动登录] 尝试自动完成登录流程...")
+                    result = await _auto_login_flow(page, context, config)
+                    if result["success"]:
+                        return result
+                    else:
+                        logger.warning(f"[自动登录] 自动登录失败: {result.get('message')}")
+                        return result
+                else:
+                    reason = []
+                    if not auto_login_enabled:
+                        reason.append("auto_login 未启用")
+                    if not imap_enabled:
+                        reason.append("IMAP 未启用")
+                    logger.info(f"[自动登录] 跳过自动登录: {', '.join(reason)}")
+                    return {
+                        "success": False,
+                        "message": f"Cookie 已失效，需要手动登录（{', '.join(reason)}）",
+                        "needs_manual_login": True,
+                    }
 
-            # 提取 Cookie
-            browser_cookies = await context.cookies()
-            new_secure_c_ses = None
-            new_host_c_oses = None
-            new_nid = None
-
-            for cookie in browser_cookies:
-                if cookie["name"] == "__Secure-C_SES":
-                    new_secure_c_ses = cookie["value"]
-                elif cookie["name"] == "__Host-C_OSES":
-                    new_host_c_oses = cookie["value"]
-                elif cookie["name"] == "NID":
-                    new_nid = cookie["value"]
-
-            if not new_secure_c_ses:
-                return {
-                    "success": False,
-                    "message": "未能提取有效 Cookie",
-                    "needs_manual_login": True,
-                }
-
-            # 提取 csesidx
-            csesidx = None
-            if "csesidx=" in current_url:
-                csesidx = current_url.split("csesidx=", 1)[1].split("&", 1)[0]
-
-            # 更新配置
-            new_config = {
-                "secure_c_ses": new_secure_c_ses,
-                "cookies_saved_at": datetime.now().strftime(TIME_FMT),
-            }
-            if new_host_c_oses:
-                new_config["host_c_oses"] = new_host_c_oses
-            if new_nid:
-                new_config["nid"] = new_nid
-            if csesidx:
-                new_config["csesidx"] = csesidx
-
-            save_config(new_config)
-            on_cookie_refreshed()
-
-            logger.info("Cookie 刷新成功")
-            return {
-                "success": True,
-                "message": "Cookie 刷新成功",
-                "needs_manual_login": False,
-            }
+            # Cookie 有效，提取最新值
+            return await _extract_and_save_cookies(context, page.url)
 
         finally:
             await page.close()
             await context.close()
 
     except Exception as e:
-        logger.error(f"浏览器刷新 Cookie 失败: {e}")
+        logger.error(f"[自动登录] 浏览器刷新 Cookie 失败: {e}")
         return {
             "success": False,
             "message": str(e),
@@ -738,3 +725,451 @@ async def try_refresh_cookie_via_browser(headless: bool = True) -> dict:
             await browser.close()
         if playwright:
             await playwright.stop()
+
+
+async def _auto_login_flow(page, context, config: dict) -> dict:
+    """自动登录流程
+    
+    流程：
+    1. 检测到登录页
+    2. 输入邮箱并点击下一步
+    3. 等待验证码页面
+    4. 从 IMAP 获取验证码
+    5. 填充验证码并提交
+    
+    Args:
+        page: Playwright 页面对象
+        context: Playwright 上下文对象
+        config: 配置字典
+        
+    Returns:
+        {"success": bool, "message": str, "needs_manual_login": bool}
+    """
+    import asyncio
+    
+    try:
+        # 获取保存的用户邮箱
+        session_config = config.get("session", {})
+        username = session_config.get("username")
+        
+        if not username:
+            logger.warning("[自动登录] 未找到保存的用户邮箱，无法自动登录")
+            return {
+                "success": False,
+                "message": "未找到保存的用户邮箱，请先手动登录一次",
+                "needs_manual_login": True,
+            }
+        
+        logger.info(f"[自动登录] 使用邮箱: {username}")
+        
+        # 等待页面加载
+        await asyncio.sleep(2)
+        
+        max_wait_seconds = 180  # 最多等待 3 分钟
+        start_time = asyncio.get_event_loop().time()
+        email_input_handled = False
+        verification_handled = False
+        
+        while asyncio.get_event_loop().time() - start_time < max_wait_seconds:
+            current_url = page.url
+            
+            # 检查是否已到达主页（登录成功）
+            if _is_main_page(current_url):
+                logger.info("[自动登录] ✓ 登录成功，已到达主页")
+                return await _extract_and_save_cookies(context, current_url)
+            
+            # 检查是否在验证码页面
+            if _is_verification_page(current_url) and not verification_handled:
+                logger.info("[自动登录] 检测到验证码页面，开始获取验证码...")
+                
+                # 等待一下让页面稳定
+                await asyncio.sleep(3)
+                
+                # 从 IMAP 获取验证码
+                from .imap_reader import get_verification_code
+                code = await get_verification_code(config=config)
+                
+                if code:
+                    logger.info(f"[自动登录] 从 IMAP 获取到验证码: {code}")
+                    
+                    # 填充验证码
+                    success = await _fill_verification_code(page, code)
+                    if success:
+                        verification_handled = True
+                        logger.info("[自动登录] 验证码已填充，等待页面跳转...")
+                    else:
+                        logger.warning("[自动登录] 验证码填充失败")
+                else:
+                    logger.warning("[自动登录] 未能从 IMAP 获取验证码")
+                    return {
+                        "success": False,
+                        "message": "未能从 IMAP 获取验证码",
+                        "needs_manual_login": True,
+                    }
+            
+            # 检查是否在登录页（需要输入邮箱）
+            elif _is_login_page(current_url) and not email_input_handled:
+                logger.info("[自动登录] 检测到登录页，准备输入邮箱...")
+                
+                # 输入邮箱并点击下一步
+                success = await _input_email_and_proceed(page, username)
+                if success:
+                    email_input_handled = True
+                    logger.info("[自动登录] 邮箱已输入，等待页面跳转...")
+                else:
+                    logger.warning("[自动登录] 输入邮箱失败")
+                    return {
+                        "success": False,
+                        "message": "在登录页输入邮箱失败",
+                        "needs_manual_login": True,
+                    }
+            
+            # 等待页面变化
+            await asyncio.sleep(2)
+        
+        # 超时
+        logger.warning("[自动登录] 登录超时")
+        return {
+            "success": False,
+            "message": "自动登录超时（3分钟）",
+            "needs_manual_login": True,
+        }
+        
+    except Exception as e:
+        logger.error(f"[自动登录] 自动登录流程异常: {e}")
+        return {
+            "success": False,
+            "message": str(e),
+            "needs_manual_login": True,
+        }
+
+
+async def _fill_verification_code(page, code: str) -> bool:
+    """填充验证码
+    
+    Args:
+        page: Playwright 页面对象
+        code: 验证码字符串
+        
+    Returns:
+        是否成功
+    """
+    import asyncio
+    
+    try:
+        logger.info(f"[自动登录] 准备填充验证码: {code}")
+        
+        # Google 验证码输入框选择器
+        google_pin_selector = 'input[name="pinInput"]'
+        
+        # 等待输入框加载
+        pin_input = None
+        for attempt in range(10):
+            try:
+                pin_input = await page.query_selector(google_pin_selector)
+                if pin_input:
+                    break
+                logger.debug(f"[自动登录] 等待输入框加载... ({attempt + 1}/10)")
+                await asyncio.sleep(0.5)
+            except Exception:
+                await asyncio.sleep(0.5)
+        
+        if pin_input:
+            logger.info("[自动登录] 找到验证码输入框")
+            
+            # 点击获取焦点
+            await pin_input.click()
+            await asyncio.sleep(0.3)
+            
+            # 清空并输入
+            for _ in range(6):
+                await page.keyboard.press("Backspace")
+            await asyncio.sleep(0.1)
+            
+            await page.keyboard.type(code)
+            logger.info(f"[自动登录] 已输入验证码: {code}")
+            
+            # 等待并尝试自动提交
+            await asyncio.sleep(1)
+            submit_selectors = [
+                'button[type="submit"]',
+                'button:has-text("Next")',
+                'button:has-text("Verify")',
+            ]
+            for submit_selector in submit_selectors:
+                try:
+                    submit_btn = await page.query_selector(submit_selector)
+                    if submit_btn:
+                        await submit_btn.click()
+                        logger.info("[自动登录] 已点击提交按钮")
+                        break
+                except Exception:
+                    continue
+            
+            return True
+        
+        # 回退：尝试普通输入框
+        logger.info("[自动登录] 未找到 Google 风格输入框，尝试普通输入框")
+        input_selectors = ['input[type="text"]', 'input[name="code"]', 'input[name="pin"]']
+        
+        for selector in input_selectors:
+            try:
+                input_element = await page.query_selector(selector)
+                if input_element:
+                    await input_element.click()
+                    await asyncio.sleep(0.1)
+                    for _ in range(10):
+                        await page.keyboard.press("Backspace")
+                    await page.keyboard.type(code)
+                    logger.info(f"[自动登录] 已通过 {selector} 输入验证码")
+                    return True
+            except Exception:
+                continue
+        
+        logger.warning("[自动登录] 未找到验证码输入框")
+        return False
+        
+    except Exception as e:
+        logger.error(f"[自动登录] 填充验证码失败: {e}")
+        return False
+def _is_login_page(url: str) -> bool:
+    """判断是否在登录页面（需要输入邮箱）"""
+    # 登录页特征：auth.business.gemini.google 或 accounts.google.com
+    login_indicators = [
+        "auth.business.gemini.google/login",
+        "auth.business.gemini.google/account-chooser",
+        "accounts.google.com/signin",
+        "accounts.google.com/v3/signin",
+        "accounts.google.com/ServiceLogin",
+    ]
+    return any(indicator in url for indicator in login_indicators)
+
+
+async def _input_email_and_proceed(page, email: str) -> bool:
+    """在登录页输入邮箱并点击下一步
+    
+    Args:
+        page: Playwright 页面对象
+        email: 要输入的邮箱地址
+        
+    Returns:
+        是否成功
+    """
+    import asyncio
+    
+    try:
+        logger.info(f"[自动登录] 准备输入邮箱: {email}")
+        
+        # 等待页面稳定
+        await asyncio.sleep(2)
+        
+        # Google 登录页邮箱输入框选择器
+        email_selectors = [
+            'input[type="email"]',
+            'input[name="identifier"]',
+            'input#identifierId',
+            'input[autocomplete="username"]',
+        ]
+        
+        email_input = None
+        for selector in email_selectors:
+            try:
+                email_input = await page.query_selector(selector)
+                if email_input:
+                    is_visible = await email_input.is_visible()
+                    if is_visible:
+                        logger.info(f"[自动登录] 找到邮箱输入框: {selector}")
+                        break
+                    else:
+                        email_input = None
+            except Exception:
+                continue
+        
+        if not email_input:
+            logger.warning("[自动登录] 未找到邮箱输入框")
+            return False
+        
+        # 点击输入框获取焦点
+        await email_input.click()
+        await asyncio.sleep(0.3)
+        
+        # 清空输入框
+        await page.keyboard.press("Control+a")
+        await asyncio.sleep(0.1)
+        
+        # 输入邮箱
+        await page.keyboard.type(email, delay=50)  # 模拟人类输入速度
+        logger.info(f"[自动登录] 已输入邮箱: {email}")
+        
+        await asyncio.sleep(0.5)
+        
+        # 查找并点击"下一步"按钮
+        next_button_selectors = [
+            'button[type="submit"]',
+            '#identifierNext',
+            'button:has-text("Next")',
+            'button:has-text("下一步")',
+            'div[role="button"]:has-text("Next")',
+            'div[role="button"]:has-text("下一步")',
+            'span:has-text("Next")',
+            'span:has-text("下一步")',
+        ]
+        
+        next_button = None
+        for selector in next_button_selectors:
+            try:
+                next_button = await page.query_selector(selector)
+                if next_button:
+                    is_visible = await next_button.is_visible()
+                    if is_visible:
+                        logger.info(f"[自动登录] 找到下一步按钮: {selector}")
+                        break
+                    else:
+                        next_button = None
+            except Exception:
+                continue
+        
+        if next_button:
+            await next_button.click()
+            logger.info("[自动登录] 已点击下一步按钮")
+        else:
+            # 尝试按 Enter 键提交
+            logger.info("[自动登录] 未找到下一步按钮，尝试按 Enter 键")
+            await page.keyboard.press("Enter")
+        
+        # 等待页面跳转
+        await asyncio.sleep(3)
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"[自动登录] 输入邮箱失败: {e}")
+        return False
+
+
+def _is_verification_page(url: str) -> bool:
+    """判断是否在验证码页面"""
+    return any(indicator in url for indicator in VERIFICATION_INDICATORS)
+
+
+def _is_main_page(url: str) -> bool:
+    """判断是否已到达主页面（登录成功）"""
+    if "business.gemini.google" not in url:
+        return False
+    
+    # 排除登录相关页面
+    for host in LOGIN_HOSTS:
+        if host in url:
+            return False
+    
+    # 检查是否是主页
+    return "/home/" in url
+
+
+async def _extract_and_save_cookies(context, current_url: str) -> dict:
+    """提取并保存 Cookie
+    
+    Args:
+        context: Playwright 上下文对象
+        current_url: 当前页面 URL
+        
+    Returns:
+        {"success": bool, "message": str, "needs_manual_login": bool}
+    """
+    try:
+        browser_cookies = await context.cookies()
+        new_secure_c_ses = None
+        new_host_c_oses = None
+        new_nid = None
+        
+        # 收集所有相关 Cookie
+        gemini_cookies = []
+        target_domains = ["auth.business.gemini.google", "business.gemini.google", ".business.gemini.google"]
+        
+        for cookie in browser_cookies:
+            cookie_domain = cookie.get("domain", "")
+            is_target_domain = any(
+                cookie_domain == d or cookie_domain.endswith(d)
+                for d in target_domains
+            )
+            if is_target_domain:
+                gemini_cookies.append(f"{cookie['name']}={cookie['value']}")
+            
+            if cookie["name"] == "__Secure-C_SES":
+                new_secure_c_ses = cookie["value"]
+            elif cookie["name"] == "__Host-C_OSES":
+                new_host_c_oses = cookie["value"]
+            elif cookie["name"] == "NID":
+                new_nid = cookie["value"]
+
+        if not new_secure_c_ses:
+            return {
+                "success": False,
+                "message": "未能提取有效 Cookie",
+                "needs_manual_login": True,
+            }
+
+        # 提取 csesidx 和 group_id
+        csesidx = None
+        group_id = None
+        
+        if "csesidx=" in current_url:
+            csesidx = current_url.split("csesidx=", 1)[1].split("&", 1)[0]
+        
+        if "/cid/" in current_url:
+            after = current_url.split("/cid/", 1)[1]
+            for sep in ("/", "?", "#"):
+                after = after.split(sep, 1)[0]
+            group_id = after
+
+        # 构造 cookie_raw
+        cookie_raw = "; ".join(gemini_cookies) if gemini_cookies else None
+
+        # 更新配置
+        new_config = {
+            "secure_c_ses": new_secure_c_ses,
+            "cookies_saved_at": datetime.now().strftime(TIME_FMT),
+        }
+        if new_host_c_oses:
+            new_config["host_c_oses"] = new_host_c_oses
+        if new_nid:
+            new_config["nid"] = new_nid
+        if csesidx:
+            new_config["csesidx"] = csesidx
+        if group_id:
+            new_config["group_id"] = group_id
+        if cookie_raw:
+            new_config["cookie_raw"] = cookie_raw
+
+        save_config(new_config)
+        on_cookie_refreshed()
+        mark_cookie_valid()
+
+        # 尝试获取 username 并保存（供自动登录使用）
+        try:
+            from .auth import check_session_status
+            from .config import load_config as reload_cfg
+            updated_config = reload_cfg()
+            session_status = check_session_status(updated_config)
+            username = session_status.get("username")
+            if username:
+                save_config({"session": {"username": username}})
+                logger.info(f"[自动登录] ✓ 已保存用户邮箱: {username}")
+        except Exception as e:
+            logger.warning(f"[自动登录] 获取用户邮箱失败: {e}")
+
+        logger.info(f"[自动登录] ✓ Cookie 刷新成功，csesidx={csesidx}, group_id={group_id}")
+        return {
+            "success": True,
+            "message": "Cookie 刷新成功",
+            "needs_manual_login": False,
+        }
+        
+    except Exception as e:
+        logger.error(f"[自动登录] 提取 Cookie 失败: {e}")
+        return {
+            "success": False,
+            "message": str(e),
+            "needs_manual_login": False,
+        }
+
