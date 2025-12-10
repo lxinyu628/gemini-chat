@@ -820,15 +820,19 @@ async def _auto_login_flow(page, context, config: dict) -> dict:
         # 关键：在登录过程中捕获 csesidx（它只在中间页面的 URL 中出现）
         # 使用列表以便在回调中修改
         captured_csesidx_holder = [None]
+        # 记录所有经过的 URL，用于调试
+        all_navigated_urls = []
 
         # 注册导航事件监听器，捕获所有经过的 URL（包括重定向）
         def on_frame_navigated(frame):
             if frame == page.main_frame:
                 url = frame.url
+                all_navigated_urls.append(url)
+                logger.info(f"[自动登录] 页面导航: {url}")
                 if "csesidx=" in url and not captured_csesidx_holder[0]:
                     csesidx = url.split("csesidx=", 1)[1].split("&", 1)[0]
                     captured_csesidx_holder[0] = csesidx
-                    logger.info(f"[自动登录] 通过导航事件捕获到 csesidx: {csesidx} (URL: {url[:100]})")
+                    logger.info(f"[自动登录] ★ 捕获到 csesidx: {csesidx}")
 
         page.on("framenavigated", on_frame_navigated)
 
@@ -854,7 +858,11 @@ async def _auto_login_flow(page, context, config: dict) -> dict:
 
             # 检查是否已到达主页（登录成功）
             if _is_main_page(current_url):
-                logger.info(f"[自动登录] ✓ 登录成功，已到达主页，csesidx={captured_csesidx_holder[0]}")
+                logger.info(f"[自动登录] ✓ 登录成功，已到达主页")
+                logger.info(f"[自动登录] 捕获的 csesidx: {captured_csesidx_holder[0]}")
+                logger.info(f"[自动登录] 所有导航过的 URL ({len(all_navigated_urls)} 个):")
+                for i, url in enumerate(all_navigated_urls):
+                    logger.info(f"[自动登录]   [{i+1}] {url}")
                 # 移除事件监听器
                 page.remove_listener("framenavigated", on_frame_navigated)
                 # 传递捕获的 csesidx
@@ -1133,39 +1141,58 @@ async def _extract_and_save_cookies(context, current_url: str, captured_csesidx:
         {"success": bool, "message": str, "needs_manual_login": bool}
     """
     try:
+        logger.info(f"[自动登录] _extract_and_save_cookies 被调用")
+        logger.info(f"[自动登录]   current_url: {current_url}")
+        logger.info(f"[自动登录]   captured_csesidx: {captured_csesidx}")
+
         # 提取 csesidx：优先使用传入的 captured_csesidx，其次从 URL 提取
         csesidx = captured_csesidx
         if not csesidx and "csesidx=" in current_url:
             csesidx = current_url.split("csesidx=", 1)[1].split("&", 1)[0]
+            logger.info(f"[自动登录]   从 URL 提取到 csesidx: {csesidx}")
 
-        # 如果仍然没有 csesidx，尝试通过浏览器访问 list-sessions 获取
+        # 如果仍然没有 csesidx，尝试通过浏览器的 fetch API 获取 list-sessions
         if not csesidx:
             logger.info("[自动登录] 未捕获到 csesidx，尝试从 list-sessions 获取...")
             try:
                 page = await context.new_page()
                 try:
-                    # 访问 list-sessions 页面
-                    list_sessions_url = "https://auth.business.gemini.google/list-sessions?rt=json"
-                    response = await page.goto(list_sessions_url, timeout=30000)
-                    if response and response.ok:
-                        text = await page.content()
+                    # 先访问目标域，确保 Cookie 生效
+                    await page.goto("https://business.gemini.google/", timeout=30000, wait_until="domcontentloaded")
+
+                    # 使用 JavaScript fetch 获取 list-sessions
+                    result = await page.evaluate("""
+                        async () => {
+                            try {
+                                const resp = await fetch('https://auth.business.gemini.google/list-sessions?rt=json', {
+                                    credentials: 'include'
+                                });
+                                const text = await resp.text();
+                                return { ok: resp.ok, status: resp.status, text: text };
+                            } catch (e) {
+                                return { error: e.message };
+                            }
+                        }
+                    """)
+
+                    if result.get("ok"):
+                        text = result.get("text", "")
                         # 解析 JSON（可能有前缀）
                         import json
                         if ")]}'\\n" in text:
                             text = text.split(")]}'\\n", 1)[1]
                         elif ")]}'" in text:
                             text = text.split(")]}'", 1)[1]
-                        # 尝试从 <pre> 标签中提取
-                        if "<pre>" in text:
-                            text = text.split("<pre>", 1)[1].split("</pre>", 1)[0]
                         try:
                             data = json.loads(text.strip())
                             sessions = data.get("sessions", [])
                             if sessions:
                                 csesidx = str(sessions[0].get("csesidx", ""))
                                 logger.info(f"[自动登录] 从 list-sessions 获取到 csesidx: {csesidx}")
-                        except json.JSONDecodeError:
-                            logger.warning(f"[自动登录] 解析 list-sessions 响应失败")
+                        except json.JSONDecodeError as e:
+                            logger.warning(f"[自动登录] 解析 list-sessions 响应失败: {e}, text={text[:200]}")
+                    else:
+                        logger.warning(f"[自动登录] list-sessions 请求失败: status={result.get('status')}, error={result.get('error')}")
                 finally:
                     await page.close()
             except Exception as e:
