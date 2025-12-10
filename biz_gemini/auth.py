@@ -465,6 +465,33 @@ def request_getoxsrf(config: Optional[dict] = None, allow_minimal_retry: bool = 
                 # 重要：refreshcookies 请求也需要携带 Cookie
                 resp_refresh = client.get(location, headers=headers, follow_redirects=True)
                 if resp_refresh.status_code in (200, 204, 302, 303):
+                    # 关键：从 refreshcookies 响应中提取新的 Cookie，合并到原有 Cookie 中
+                    new_cookies = {}
+                    for cookie_item in resp_refresh.headers.get_list("set-cookie"):
+                        # 解析 Set-Cookie 头，提取 name=value
+                        if "=" in cookie_item:
+                            cookie_part = cookie_item.split(";")[0].strip()
+                            if "=" in cookie_part:
+                                name, value = cookie_part.split("=", 1)
+                                new_cookies[name.strip()] = value.strip()
+
+                    # 如果有新 Cookie，合并到请求头中
+                    if new_cookies:
+                        logger.info(f"refreshcookies 返回了新 Cookie: {list(new_cookies.keys())}")
+                        # 解析原有 Cookie
+                        existing_cookies = {}
+                        for part in cookie_header.split(";"):
+                            part = part.strip()
+                            if "=" in part:
+                                name, value = part.split("=", 1)
+                                existing_cookies[name.strip()] = value.strip()
+                        # 合并新 Cookie（新的覆盖旧的）
+                        existing_cookies.update(new_cookies)
+                        # 重新构造 Cookie 字符串
+                        updated_cookie_header = "; ".join(f"{k}={v}" for k, v in existing_cookies.items())
+                        headers = {**headers_base, "cookie": updated_cookie_header}
+                        logger.info(f"使用更新后的 Cookie 重试 getoxsrf")
+
                     resp = client.get(url, headers=headers)
                 else:
                     logger.warning(f"refreshcookies 请求失败: HTTP {resp_refresh.status_code}")
