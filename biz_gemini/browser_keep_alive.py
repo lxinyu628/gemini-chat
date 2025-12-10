@@ -829,10 +829,13 @@ async def _auto_login_flow(page, context, config: dict) -> dict:
                 url = frame.url
                 all_navigated_urls.append(url)
                 logger.info(f"[自动登录] 页面导航: {url}")
-                if "csesidx=" in url and not captured_csesidx_holder[0]:
-                    csesidx = url.split("csesidx=", 1)[1].split("&", 1)[0]
-                    captured_csesidx_holder[0] = csesidx
-                    logger.info(f"[自动登录] ★ 捕获到 csesidx: {csesidx}")
+                # 支持 csesidx= 和 csesidx: 两种格式
+                if not captured_csesidx_holder[0]:
+                    import re
+                    match = re.search(r'csesidx[=:](\d+)', url)
+                    if match:
+                        captured_csesidx_holder[0] = match.group(1)
+                        logger.info(f"[自动登录] ★ 捕获到 csesidx: {captured_csesidx_holder[0]}")
 
         page.on("framenavigated", on_frame_navigated)
 
@@ -841,10 +844,13 @@ async def _auto_login_flow(page, context, config: dict) -> dict:
             loop_count += 1
             current_url = page.url
 
-            # 也从当前 URL 尝试捕获（作为备份）
-            if "csesidx=" in current_url and not captured_csesidx_holder[0]:
-                captured_csesidx_holder[0] = current_url.split("csesidx=", 1)[1].split("&", 1)[0]
-                logger.info(f"[自动登录] 从当前 URL 捕获到 csesidx: {captured_csesidx_holder[0]}")
+            # 也从当前 URL 尝试捕获（作为备份，支持 csesidx= 和 csesidx: 两种格式）
+            if not captured_csesidx_holder[0]:
+                import re
+                match = re.search(r'csesidx[=:](\d+)', current_url)
+                if match:
+                    captured_csesidx_holder[0] = match.group(1)
+                    logger.info(f"[自动登录] 从当前 URL 捕获到 csesidx: {captured_csesidx_holder[0]}")
 
             # 调试日志：每5次循环或重要状态变化时输出
             is_main = _is_main_page(current_url)
@@ -1151,52 +1157,125 @@ async def _extract_and_save_cookies(context, current_url: str, captured_csesidx:
             csesidx = current_url.split("csesidx=", 1)[1].split("&", 1)[0]
             logger.info(f"[自动登录]   从 URL 提取到 csesidx: {csesidx}")
 
-        # 如果仍然没有 csesidx，尝试通过浏览器的 fetch API 获取 list-sessions
+        # 如果仍然没有 csesidx，尝试多种方式获取
         if not csesidx:
-            logger.info("[自动登录] 未捕获到 csesidx，尝试从 list-sessions 获取...")
+            logger.info("[自动登录] 未捕获到 csesidx，尝试多种方式获取...")
+
+            # 方式1：从页面文本中提取 csesidx
             try:
                 page = await context.new_page()
                 try:
-                    # 先访问目标域，确保 Cookie 生效
-                    await page.goto("https://business.gemini.google/", timeout=30000, wait_until="domcontentloaded")
+                    await page.goto("https://business.gemini.google/", timeout=30000, wait_until="networkidle")
+                    await asyncio.sleep(2)  # 等待页面完全加载
 
-                    # 使用 JavaScript fetch 获取 list-sessions
-                    result = await page.evaluate("""
-                        async () => {
-                            try {
-                                const resp = await fetch('https://auth.business.gemini.google/list-sessions?rt=json', {
-                                    credentials: 'include'
-                                });
-                                const text = await resp.text();
-                                return { ok: resp.ok, status: resp.status, text: text };
-                            } catch (e) {
-                                return { error: e.message };
-                            }
-                        }
-                    """)
+                    # 检查当前 URL 是否包含 csesidx
+                    page_url = page.url
+                    logger.info(f"[自动登录] 当前页面 URL: {page_url}")
 
-                    if result.get("ok"):
-                        text = result.get("text", "")
-                        # 解析 JSON（可能有前缀）
-                        import json
-                        if ")]}'\\n" in text:
-                            text = text.split(")]}'\\n", 1)[1]
-                        elif ")]}'" in text:
-                            text = text.split(")]}'", 1)[1]
+                    import re
+                    # 从 URL 提取 csesidx（支持 csesidx= 和 csesidx: 两种格式）
+                    match = re.search(r'csesidx[=:](\d+)', page_url)
+                    if match:
+                        csesidx = match.group(1)
+                        logger.info(f"[自动登录] 从页面 URL 提取到 csesidx: {csesidx}")
+
+                    # 如果 URL 中没有，尝试从页面文本提取
+                    if not csesidx:
                         try:
-                            data = json.loads(text.strip())
-                            sessions = data.get("sessions", [])
-                            if sessions:
-                                csesidx = str(sessions[0].get("csesidx", ""))
-                                logger.info(f"[自动登录] 从 list-sessions 获取到 csesidx: {csesidx}")
-                        except json.JSONDecodeError as e:
-                            logger.warning(f"[自动登录] 解析 list-sessions 响应失败: {e}, text={text[:200]}")
-                    else:
-                        logger.warning(f"[自动登录] list-sessions 请求失败: status={result.get('status')}, error={result.get('error')}")
+                            page_text = await page.locator("body").text_content() or ""
+                            match = re.search(r'csesidx[=:](\d+)', page_text)
+                            if match:
+                                csesidx = match.group(1)
+                                logger.info(f"[自动登录] 从页面文本提取到 csesidx: {csesidx}")
+                        except Exception as e:
+                            logger.debug(f"[自动登录] 从页面文本提取 csesidx 失败: {e}")
+
+                    # 如果页面文本中也没有，尝试从页面 JavaScript 变量提取
+                    if not csesidx:
+                        try:
+                            js_csesidx = await page.evaluate("""
+                                () => {
+                                    // 尝试从全局变量或页面数据中获取 csesidx
+                                    if (window.csesidx) return window.csesidx;
+                                    if (window.__INITIAL_STATE__ && window.__INITIAL_STATE__.csesidx)
+                                        return window.__INITIAL_STATE__.csesidx;
+                                    // 尝试从 URL hash 或 search params 获取
+                                    const urlParams = new URLSearchParams(window.location.search);
+                                    if (urlParams.get('csesidx')) return urlParams.get('csesidx');
+                                    // 尝试从页面 HTML 中匹配
+                                    const html = document.documentElement.innerHTML;
+                                    const match = html.match(/csesidx[=:](\d+)/);
+                                    if (match) return match[1];
+                                    return null;
+                                }
+                            """)
+                            if js_csesidx:
+                                csesidx = str(js_csesidx)
+                                logger.info(f"[自动登录] 从页面 JavaScript 提取到 csesidx: {csesidx}")
+                        except Exception as e:
+                            logger.debug(f"[自动登录] 从页面 JavaScript 提取 csesidx 失败: {e}")
                 finally:
                     await page.close()
             except Exception as e:
-                logger.warning(f"[自动登录] 从 list-sessions 获取 csesidx 失败: {e}")
+                logger.warning(f"[自动登录] 从页面提取 csesidx 失败: {e}")
+
+            # 方式2：如果页面提取失败，尝试通过访问 /home/ 页面触发重定向来获取 csesidx
+            # 注意：list-sessions API 需要 csesidx 参数，所以不能用它来获取 csesidx
+            if not csesidx:
+                logger.info("[自动登录] 页面提取失败，尝试通过访问 /home/ 触发重定向获取 csesidx...")
+                try:
+                    page = await context.new_page()
+                    try:
+                        # 记录所有重定向 URL
+                        redirect_urls = []
+
+                        def on_response(response):
+                            url = response.url
+                            redirect_urls.append(url)
+                            # 检查重定向 URL 中是否包含 csesidx
+                            import re
+                            match = re.search(r'csesidx[=:](\d+)', url)
+                            if match:
+                                nonlocal csesidx
+                                if not csesidx:
+                                    csesidx = match.group(1)
+                                    logger.info(f"[自动登录] 从重定向 URL 捕获到 csesidx: {csesidx}")
+
+                        page.on("response", on_response)
+
+                        # 访问 /home/ 页面，这通常会触发包含 csesidx 的重定向
+                        await page.goto("https://business.gemini.google/home/", timeout=30000, wait_until="networkidle")
+                        await asyncio.sleep(2)
+
+                        # 检查最终 URL
+                        final_url = page.url
+                        logger.info(f"[自动登录] 最终 URL: {final_url}")
+                        logger.info(f"[自动登录] 经过的重定向 URL ({len(redirect_urls)} 个)")
+
+                        if not csesidx:
+                            import re
+                            match = re.search(r'csesidx[=:](\d+)', final_url)
+                            if match:
+                                csesidx = match.group(1)
+                                logger.info(f"[自动登录] 从最终 URL 提取到 csesidx: {csesidx}")
+
+                        # 如果还是没有，尝试从页面 HTML 中提取
+                        if not csesidx:
+                            try:
+                                html_content = await page.content()
+                                import re
+                                match = re.search(r'csesidx[=:](\d+)', html_content)
+                                if match:
+                                    csesidx = match.group(1)
+                                    logger.info(f"[自动登录] 从页面 HTML 提取到 csesidx: {csesidx}")
+                            except Exception as e:
+                                logger.debug(f"[自动登录] 从页面 HTML 提取 csesidx 失败: {e}")
+
+                        page.remove_listener("response", on_response)
+                    finally:
+                        await page.close()
+                except Exception as e:
+                    logger.warning(f"[自动登录] 通过重定向获取 csesidx 失败: {e}")
 
         if csesidx:
             logger.info(f"[自动登录] 使用 csesidx: {csesidx}")
