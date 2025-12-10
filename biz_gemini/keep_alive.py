@@ -191,7 +191,7 @@ class KeepAliveService:
 
             # 保存 username 到 config.json（供自动登录使用）
             if self._session_username:
-                save_config({"session": {"username": self._session_username}})
+                save_config({"username": self._session_username})
 
             logger.info(f"刷新成功 (第 {self._refresh_count} 次) - 用户: {self._session_username}")
             self._notify("refreshed", {

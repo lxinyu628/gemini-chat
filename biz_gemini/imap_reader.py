@@ -432,8 +432,7 @@ class IMAPReader:
 
             if status_callback:
                 try:
-                    # 支持同步和异步回调
-                    import asyncio
+                    # 支持同步和异步回调（asyncio 已在模块顶部导入）
                     result = status_callback(f"正在等待验证码邮件... (剩余 {remaining} 秒)")
                     if asyncio.iscoroutine(result):
                         await result

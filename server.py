@@ -207,13 +207,16 @@ async def startup_event() -> None:
     if _is_primary_worker:
         # 启动 Session 保活服务（只在主 worker 中运行）
         logger.info("启动 Session 保活服务...")
-        auto_browser_refresh = browser_keep_alive_config.get("enabled", False)
+        # 注意：如果 BrowserKeepAliveService 启用，则由它负责浏览器刷新和自动登录
+        # KeepAliveService 不需要再调用 _try_browser_refresh，避免重复触发
+        browser_keep_alive_enabled = browser_keep_alive_config.get("enabled", False)
+        auto_browser_refresh = False  # BrowserKeepAliveService 会处理，这里不再重复
         keep_alive = get_keep_alive_service(
             interval_minutes=10,
             auto_browser_refresh=auto_browser_refresh,
         )
         await keep_alive.start()
-        logger.info(f"Session 保活服务已启动（每 10 分钟检查一次，自动浏览器刷新: {auto_browser_refresh}）")
+        logger.info(f"Session 保活服务已启动（每 10 分钟检查一次，自动浏览器刷新: {auto_browser_refresh}，浏览器保活服务: {'启用' if browser_keep_alive_enabled else '禁用'}）")
 
         # 启动浏览器保活服务（如果启用，只在主 worker 中运行）
         if browser_keep_alive_config.get("enabled", False):
@@ -482,7 +485,7 @@ async def get_status() -> dict:
             username = session_status.get("username")
             if username:
                 try:
-                    save_config({"session": {"username": username}})
+                    save_config({"username": username})
                 except Exception:
                     pass
         elif session_status.get("expired", False):

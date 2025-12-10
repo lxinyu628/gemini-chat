@@ -602,7 +602,8 @@ class RemoteBrowserSession:
             nid = None
 
             # 收集相关域的所有 cookie 用于构造 cookie_raw
-            gemini_cookies = []
+            # 使用字典去重，保留最后一个（与下面提取个别字段的逻辑保持一致）
+            cookie_map = {}
             target_domains = ["auth.business.gemini.google", "business.gemini.google", ".business.gemini.google"]
 
             for cookie in cookies:
@@ -613,7 +614,7 @@ class RemoteBrowserSession:
                     for d in target_domains
                 )
                 if is_target_domain:
-                    gemini_cookies.append(f"{cookie['name']}={cookie['value']}")
+                    cookie_map[cookie['name']] = cookie['value']
 
                 # 同时提取关键 cookie 字段（保持向后兼容）
                 if cookie["name"] == "__Secure-C_SES":
@@ -624,6 +625,7 @@ class RemoteBrowserSession:
                     nid = cookie["value"]
 
             # 构造 cookie_raw（按原样拼出 raw cookie header）
+            gemini_cookies = [f"{k}={v}" for k, v in cookie_map.items()]
             cookie_raw = "; ".join(gemini_cookies) if gemini_cookies else None
 
             if secure_c_ses and csesidx and group_id:
