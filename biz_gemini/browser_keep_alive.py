@@ -361,49 +361,46 @@ class BrowserKeepAliveService:
     async def _do_refresh(self) -> bool:
         """执行一次保活刷新
 
+        使用浏览器自动化完成保活，在浏览器环境中执行 getoxsrf 请求，
+        浏览器会自动处理 refreshcookies 重定向。
+
         Returns:
             是否成功
         """
         try:
             config = load_config()
 
-            # 检查是否有必要的凭证
             if not config.get("secure_c_ses") or not config.get("csesidx"):
                 logger.debug("未登录，跳过浏览器保活")
                 return False
 
             logger.info(f"开始浏览器保活... ({datetime.now().strftime('%H:%M:%S')})")
 
-            # 初始化浏览器（如果需要）
             if not self._browser or not self._context:
                 if not await self._init_browser():
                     return False
 
-            # 创建新页面访问目标站点
             page = await self._context.new_page()
 
             try:
                 await page.goto(TARGET_URL, timeout=60000)
                 await page.wait_for_load_state("networkidle", timeout=30000)
 
-                # 反检测：模拟人类行为 - 随机等待和鼠标移动
                 await self._simulate_human_behavior(page)
 
                 current_url = page.url
 
-                # 检查是否被重定向到登录页
                 is_login_page = any(host in current_url for host in LOGIN_HOSTS)
 
                 if is_login_page:
                     logger.warning("访问被重定向到登录页，Cookie 可能已过期")
                     mark_cookie_expired("浏览器保活检测到登录页重定向")
                     self._notify("cookie_expired", {"url": current_url})
-                    
-                    # 检查是否启用了自动登录
+
                     imap_config = config.get("imap", {})
                     auto_login_enabled = imap_config.get("auto_login", False)
                     imap_enabled = imap_config.get("enabled", False)
-                    
+
                     if auto_login_enabled and imap_enabled:
                         logger.info("[自动登录] 浏览器保活服务检测到过期，尝试自动登录...")
                         result = await _auto_login_flow(page, self._context, config)
@@ -427,15 +424,71 @@ class BrowserKeepAliveService:
                         logger.info(f"[自动登录] 跳过：auto_login={auto_login_enabled}, imap={imap_enabled}")
                         return False
 
-                # 提取最新 Cookie
+                csesidx = config.get("csesidx")
+                getoxsrf_url = f"https://business.gemini.google/auth/getoxsrf?csesidx={csesidx}"
+                logger.info(f"[浏览器保活] 在浏览器中请求 getoxsrf...")
+
+                result = await page.evaluate(f"""
+                    async () => {{
+                        try {{
+                            const resp = await fetch('{getoxsrf_url}', {{
+                                credentials: 'include',
+                                headers: {{
+                                    'accept': '*/*',
+                                    'sec-fetch-dest': 'empty',
+                                    'sec-fetch-mode': 'cors',
+                                    'sec-fetch-site': 'same-origin'
+                                }}
+                            }});
+                            const text = await resp.text();
+                            return {{ ok: resp.ok, status: resp.status, text: text, url: resp.url }};
+                        }} catch (e) {{
+                            return {{ error: e.message }};
+                        }}
+                    }}
+                """)
+
+                if result.get("error"):
+                    logger.warning(f"[浏览器保活] getoxsrf 请求失败: {result['error']}")
+                    self._last_error = result["error"]
+                    return False
+
+                if not result.get("ok"):
+                    status_code = result.get("status")
+                    logger.warning(f"[浏览器保活] getoxsrf 返回非 200: status={status_code}")
+
+                    if status_code in (401, 403):
+                        mark_cookie_expired(f"getoxsrf 返回 HTTP {status_code}")
+                        self._notify("cookie_expired", {"status_code": status_code})
+
+                    self._last_error = f"HTTP {status_code}"
+                    return False
+
+                text = result.get("text", "")
+                if text.startswith(")]}'"):
+                    text = text[4:].strip()
+
+                import json
+                try:
+                    data = json.loads(text)
+                except json.JSONDecodeError as e:
+                    logger.warning(f"[浏览器保活] getoxsrf 返回非 JSON: {text[:200]}")
+                    self._last_error = f"JSON 解析失败: {e}"
+                    return False
+
+                if "keyId" not in data or "xsrfToken" not in data:
+                    logger.warning(f"[浏览器保活] getoxsrf 返回数据缺少必要字段")
+                    mark_cookie_expired("getoxsrf 返回数据缺少 keyId/xsrfToken")
+                    self._last_error = "返回数据缺少 keyId/xsrfToken"
+                    return False
+
+                logger.info(f"[浏览器保活] getoxsrf 成功，keyId: {data['keyId'][:20]}...")
+
                 cookies = await self._context.cookies()
                 new_config = self._extract_cookies(cookies, current_url)
 
                 if new_config:
-                    # 更新配置
                     save_config(new_config)
-
-                    # 清理 JWT/session 缓存
                     on_cookie_refreshed()
 
                     self._last_refresh = datetime.now()
@@ -461,7 +514,6 @@ class BrowserKeepAliveService:
             logger.error(f"浏览器保活失败: {e}")
             self._notify("error", {"error": str(e)})
 
-            # 清理浏览器，下次重新初始化
             await self._cleanup_browser()
             return False
 
@@ -1135,6 +1187,194 @@ def _is_main_page(url: str) -> bool:
     return False
 
 
+async def refresh_session_via_browser(context, config: dict) -> dict:
+    """通过浏览器访问 getoxsrf 刷新会话
+
+    在浏览器环境中执行 getoxsrf 请求，浏览器会自动处理 refreshcookies 重定向。
+
+    Args:
+        context: Playwright 上下文对象
+        config: 配置字典
+
+    Returns:
+        {
+            "success": bool,
+            "jwt_data": dict | None,  # 包含 keyId, xsrfToken
+            "error": str | None,
+        }
+    """
+    csesidx = config.get("csesidx")
+    if not csesidx:
+        return {"success": False, "jwt_data": None, "error": "缺少 csesidx"}
+
+    page = None
+    try:
+        page = await context.new_page()
+
+        await page.goto("https://business.gemini.google/", timeout=60000, wait_until="networkidle")
+        await asyncio.sleep(2)
+
+        current_url = page.url
+        logger.info(f"[浏览器保活] 当前 URL: {current_url}")
+
+        if any(host in current_url for host in LOGIN_HOSTS):
+            logger.warning("[浏览器保活] 被重定向到登录页，Cookie 已过期")
+            return {"success": False, "jwt_data": None, "error": "Cookie 已过期，需要重新登录"}
+
+        getoxsrf_url = f"https://business.gemini.google/auth/getoxsrf?csesidx={csesidx}"
+        logger.info(f"[浏览器保活] 在浏览器中请求 getoxsrf...")
+
+        result = await page.evaluate(f"""
+            async () => {{
+                try {{
+                    const resp = await fetch('{getoxsrf_url}', {{
+                        credentials: 'include',
+                        headers: {{
+                            'accept': '*/*',
+                            'sec-fetch-dest': 'empty',
+                            'sec-fetch-mode': 'cors',
+                            'sec-fetch-site': 'same-origin'
+                        }}
+                    }});
+                    const text = await resp.text();
+                    return {{ ok: resp.ok, status: resp.status, text: text, url: resp.url }};
+                }} catch (e) {{
+                    return {{ error: e.message }};
+                }}
+            }}
+        """)
+
+        if result.get("error"):
+            logger.warning(f"[浏览器保活] getoxsrf 请求失败: {result['error']}")
+            return {"success": False, "jwt_data": None, "error": result["error"]}
+
+        if not result.get("ok"):
+            logger.warning(f"[浏览器保活] getoxsrf 返回非 200: status={result.get('status')}, url={result.get('url')}")
+            return {"success": False, "jwt_data": None, "error": f"HTTP {result.get('status')}"}
+
+        text = result.get("text", "")
+        if text.startswith(")]}'"):
+            text = text[4:].strip()
+
+        import json
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as e:
+            logger.warning(f"[浏览器保活] getoxsrf 返回非 JSON: {text[:200]}")
+            return {"success": False, "jwt_data": None, "error": f"JSON 解析失败: {e}"}
+
+        if "keyId" not in data or "xsrfToken" not in data:
+            logger.warning(f"[浏览器保活] getoxsrf 返回数据缺少必要字段: {data}")
+            return {"success": False, "jwt_data": None, "error": "返回数据缺少 keyId/xsrfToken"}
+
+        logger.info(f"[浏览器保活] getoxsrf 成功，keyId: {data['keyId'][:20]}...")
+        return {"success": True, "jwt_data": data, "error": None}
+
+    except Exception as e:
+        logger.error(f"[浏览器保活] 刷新会话失败: {e}")
+        return {"success": False, "jwt_data": None, "error": str(e)}
+    finally:
+        if page:
+            await page.close()
+
+
+async def check_session_via_browser(context, config: dict) -> dict:
+    """通过浏览器检查会话状态
+
+    在浏览器环境中执行 list-sessions 请求。
+
+    Args:
+        context: Playwright 上下文对象
+        config: 配置字典
+
+    Returns:
+        {
+            "valid": bool,
+            "expired": bool,
+            "username": str | None,
+            "error": str | None,
+        }
+    """
+    csesidx = config.get("csesidx")
+    if not csesidx:
+        return {"valid": False, "expired": True, "username": None, "error": "缺少 csesidx"}
+
+    page = None
+    try:
+        page = await context.new_page()
+
+        await page.goto("https://business.gemini.google/", timeout=60000, wait_until="networkidle")
+        await asyncio.sleep(2)
+
+        current_url = page.url
+        if any(host in current_url for host in LOGIN_HOSTS):
+            logger.warning("[浏览器保活] 被重定向到登录页，Cookie 已过期")
+            return {"valid": False, "expired": True, "username": None, "error": "Cookie 已过期"}
+
+        list_sessions_url = f"https://auth.business.gemini.google/list-sessions?csesidx={csesidx}&rt=json"
+        logger.info(f"[浏览器保活] 在浏览器中请求 list-sessions...")
+
+        result = await page.evaluate(f"""
+            async () => {{
+                try {{
+                    const resp = await fetch('{list_sessions_url}', {{
+                        credentials: 'include'
+                    }});
+                    const text = await resp.text();
+                    return {{ ok: resp.ok, status: resp.status, text: text }};
+                }} catch (e) {{
+                    return {{ error: e.message }};
+                }}
+            }}
+        """)
+
+        if result.get("error"):
+            return {"valid": False, "expired": True, "username": None, "error": result["error"]}
+
+        if not result.get("ok"):
+            return {"valid": False, "expired": True, "username": None, "error": f"HTTP {result.get('status')}"}
+
+        text = result.get("text", "")
+        if text.startswith(")]}'"):
+            text = text[4:].strip()
+
+        import json
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            return {"valid": False, "expired": True, "username": None, "error": "JSON 解析失败"}
+
+        sessions = data.get("sessions", [])
+        csesidx_str = str(csesidx)
+        current_session = None
+        for sess in sessions:
+            if str(sess.get("csesidx", "")) == csesidx_str:
+                current_session = sess
+                break
+
+        if not current_session and sessions:
+            current_session = sessions[0]
+
+        if current_session:
+            is_expired = current_session.get("expired", False)
+            username = current_session.get("username") or current_session.get("subject") or current_session.get("displayName")
+            return {
+                "valid": not is_expired,
+                "expired": is_expired,
+                "username": username,
+                "error": None,
+            }
+
+        return {"valid": False, "expired": True, "username": None, "error": "未找到 session"}
+
+    except Exception as e:
+        logger.error(f"[浏览器保活] 检查会话状态失败: {e}")
+        return {"valid": False, "expired": True, "username": None, "error": str(e)}
+    finally:
+        if page:
+            await page.close()
+
+
 async def _extract_and_save_cookies(context, current_url: str, captured_csesidx: str = None) -> dict:
     """提取并保存 Cookie
 
@@ -1193,7 +1433,7 @@ async def _extract_and_save_cookies(context, current_url: str, captured_csesidx:
                     # 如果页面文本中也没有，尝试从页面 JavaScript 变量提取
                     if not csesidx:
                         try:
-                            js_csesidx = await page.evaluate("""
+                            js_csesidx = await page.evaluate(r"""
                                 () => {
                                     // 尝试从全局变量或页面数据中获取 csesidx
                                     if (window.csesidx) return window.csesidx;

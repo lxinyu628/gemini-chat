@@ -9,13 +9,12 @@ import asyncio
 from datetime import datetime
 from typing import Callable, List, Optional
 
-from .auth import JWTManager, _get_jwt_via_api, check_session_status, on_cookie_refreshed
+from .auth import on_cookie_refreshed
 from .config import (
     is_cookie_expired,
     load_config,
     mark_cookie_expired,
     mark_cookie_valid,
-    save_config,
     set_cooldown,
 )
 from .logger import get_logger
@@ -117,11 +116,14 @@ class KeepAliveService:
                 await asyncio.sleep(60)
 
     async def _do_refresh(self) -> None:
-        """执行一次刷新检查"""
+        """执行一次刷新检查
+
+        使用浏览器自动化完成会话状态检查和 JWT 刷新，
+        避免 API 请求遇到 302 重定向到 refreshcookies 的问题。
+        """
         try:
             config = load_config()
 
-            # 检查是否有必要的凭证
             if not config.get("secure_c_ses") or not config.get("csesidx"):
                 logger.debug("未登录，跳过刷新")
                 self._last_check = datetime.now()
@@ -130,7 +132,6 @@ class KeepAliveService:
                 self._last_error = "缺少登录凭证（secure_c_ses/csesidx）"
                 return
 
-            # 检查 Cookie 是否已标记为过期
             if is_cookie_expired():
                 logger.warning("Cookie 已标记为过期，跳过 JWT 刷新")
                 self._cookie_expired = True
@@ -138,7 +139,6 @@ class KeepAliveService:
                 self._last_check = datetime.now()
                 self._last_error = "Cookie 已标记为过期"
 
-                # 如果启用了自动浏览器刷新，尝试刷新
                 if self.auto_browser_refresh and self._pending_refresh:
                     await self._try_browser_refresh()
                     self._pending_refresh = False
@@ -146,66 +146,33 @@ class KeepAliveService:
 
             logger.info(f"正在检查 Session 状态... ({datetime.now().strftime('%H:%M:%S')})")
 
-            # 1. 首先检查 session 是否有效（通过 list-sessions 接口）
-            session_status = check_session_status(config)
+            refresh_result = await self._try_browser_refresh()
+
             self._last_check = datetime.now()
-            self._session_valid = session_status.get("valid", False)
-            self._session_username = session_status.get("username")
 
-            if session_status.get("expired", False):
-                logger.warning("Session 已过期")
-                self._last_error = "Session 已过期"
-                self._cookie_expired = True
-                mark_cookie_expired("Session 已过期")
-                self._notify("expired", {"error": "Session 已过期"})
+            if refresh_result:
+                self._session_valid = True
+                self._cookie_expired = False
+                self._last_refresh = datetime.now()
+                self._refresh_count += 1
+                self._last_error = None
+                mark_cookie_valid()
 
-                # 触发浏览器刷新
-                if self.auto_browser_refresh:
-                    await self._try_browser_refresh()
-                return
-
-            if session_status.get("error"):
-                error_msg = session_status["error"]
-                logger.warning(f"检查 Session 状态失败: {error_msg}")
-                self._error_count += 1
-                self._last_error = error_msg
-
-                # 检查是否是认证错误
-                if "401" in error_msg or "403" in error_msg:
-                    self._cookie_expired = True
-                    mark_cookie_expired(error_msg)
-                    self._notify("expired", {"error": error_msg})
-
-                    if self.auto_browser_refresh:
-                        await self._try_browser_refresh()
-                return
-
-            # 2. Session 有效，刷新 JWT
-            result = _get_jwt_via_api(config)
-
-            self._last_refresh = datetime.now()
-            self._refresh_count += 1
-            self._last_error = None
-            self._cookie_expired = False
-            mark_cookie_valid()
-
-            # 保存 username 到 config.json（供自动登录使用）
-            if self._session_username:
-                save_config({"username": self._session_username})
-
-            logger.info(f"刷新成功 (第 {self._refresh_count} 次) - 用户: {self._session_username}")
-            self._notify("refreshed", {
-                "count": self._refresh_count,
-                "time": self._last_refresh.isoformat(),
-                "username": self._session_username,
-            })
+                logger.info(f"刷新成功 (第 {self._refresh_count} 次)")
+                self._notify("refreshed", {
+                    "count": self._refresh_count,
+                    "time": self._last_refresh.isoformat(),
+                    "username": self._session_username,
+                })
+            else:
+                logger.warning("浏览器刷新失败")
+                self._session_valid = False
 
         except Exception as e:
             self._error_count += 1
             self._last_error = str(e)
             error_msg = str(e)
 
-            # 检查是否是 session 过期或需要刷新 cookie
             if (
                 "expired" in error_msg.lower()
                 or "401" in error_msg
