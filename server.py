@@ -14,7 +14,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSO
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from biz_gemini.auth import JWTManager, check_session_status, ensure_jwt_valid, request_getoxsrf, GETOXSRF_URL
+from biz_gemini.auth import JWTManager, check_session_status, ensure_jwt_valid, request_getoxsrf, GETOXSRF_URL, on_cookie_refreshed
 from biz_gemini.biz_client import BizGeminiClient
 from biz_gemini.config import (
     cookies_age_seconds,
@@ -2678,6 +2678,9 @@ async def browser_websocket(websocket: WebSocket) -> None:
                     config = session.get_login_config()
                     if config:
                         save_config(config)
+                        # 清除 JWT 缓存和过期标记，使新 Cookie 生效
+                        on_cookie_refreshed()
+                        logger.info("登录配置已保存，JWT 缓存和过期标记已清除")
                         await send_message({
                             "type": "config_saved",
                             "success": True,

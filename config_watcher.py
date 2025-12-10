@@ -5,37 +5,68 @@ from typing import Callable, Optional
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileModifiedEvent
 
-from biz_gemini.config import NEW_CONFIG_FILE, reload_config
+from biz_gemini.config import NEW_CONFIG_FILE, reload_config, load_config
+
+# Session 相关的关键字段，变更时需要清除缓存
+SESSION_FIELDS = {"secure_c_ses", "host_c_oses", "csesidx", "cookie_raw"}
+
+
+def _check_session_changed(old_config: dict, new_config: dict) -> bool:
+    """检查 session 相关字段是否发生变化"""
+    old_session = old_config.get("session", {})
+    new_session = new_config.get("session", {})
+
+    for field in SESSION_FIELDS:
+        if old_session.get(field) != new_session.get(field):
+            return True
+    return False
 
 
 class ConfigFileEventHandler(FileSystemEventHandler):
     """配置文件变更事件处理器"""
-    
+
     def __init__(self, callback: Callable[[dict], None]):
         super().__init__()
         self.callback = callback
         self.last_reload_time = 0
         self.reload_cooldown = 2  # 防抖：2秒内只重载一次
-    
+        # 保存旧配置用于比较
+        self._old_config: Optional[dict] = None
+
     def on_modified(self, event):
         """文件修改事件处理"""
         if isinstance(event, FileModifiedEvent):
             # 只监控 config.json
             if Path(event.src_path).resolve() == NEW_CONFIG_FILE.resolve():
                 current_time = time.time()
-                
+
                 # 防抖处理
                 if current_time - self.last_reload_time < self.reload_cooldown:
                     return
-                
+
                 self.last_reload_time = current_time
                 print(f"[*] 检测到配置文件变更: {event.src_path}")
-                
+
                 try:
+                    # 保存旧配置
+                    old_config = self._old_config
+
                     # 重新加载配置
                     new_config = reload_config()
                     print("[+] 配置重载成功")
-                    
+
+                    # 检查 session 是否变更，如果变更则清除缓存
+                    if old_config and _check_session_changed(old_config, new_config):
+                        try:
+                            from biz_gemini.auth import on_cookie_refreshed
+                            on_cookie_refreshed()
+                            print("[+] 检测到 session 变更，已清除 JWT 缓存和过期标记")
+                        except Exception as e:
+                            print(f"[!] 清除缓存失败: {e}")
+
+                    # 更新旧配置
+                    self._old_config = new_config
+
                     # 调用回调函数
                     if self.callback:
                         self.callback(new_config)
@@ -69,14 +100,20 @@ class ConfigWatcher:
         
         # 创建事件处理器
         self.event_handler = ConfigFileEventHandler(self.callback)
-        
+
+        # 初始化旧配置（用于检测 session 变更）
+        try:
+            self.event_handler._old_config = load_config()
+        except Exception:
+            self.event_handler._old_config = None
+
         # 创建观察者
         self.observer = Observer()
-        
+
         # 监控配置文件所在目录
         watch_dir = NEW_CONFIG_FILE.parent
         self.observer.schedule(self.event_handler, str(watch_dir), recursive=False)
-        
+
         # 启动观察者
         self.observer.start()
         print(f"[+] 配置监控已启动，监控文件: {NEW_CONFIG_FILE}")
