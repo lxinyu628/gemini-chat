@@ -278,43 +278,99 @@ class BrowserKeepAliveService:
 
         cookies = []
 
-        # __Secure- 前缀的 Cookie 可以设置 domain
-        secure_c_ses = config.get("secure_c_ses")
-        if secure_c_ses:
-            cookies.append({
-                "name": "__Secure-C_SES",
-                "value": secure_c_ses,
-                "domain": "business.gemini.google",
-                "path": "/",
-                "secure": True,
-                "httpOnly": True,
-            })
+        cookie_raw = config.get("cookie_raw")
+        if cookie_raw:
+            for part in cookie_raw.split(";"):
+                part = part.strip()
+                if "=" in part:
+                    name, value = part.split("=", 1)
+                    name = name.strip()
+                    value = value.strip()
 
-        # __Host- 前缀的 Cookie 不能设置 domain，使用 url（不能同时设置 path）
-        host_c_oses = config.get("host_c_oses")
-        if host_c_oses:
-            cookies.append({
-                "name": "__Host-C_OSES",
-                "value": host_c_oses,
-                "url": "https://business.gemini.google/",
-                "secure": True,
-                "httpOnly": True,
-            })
+                    if name.startswith("__Host-"):
+                        cookies.append({
+                            "name": name,
+                            "value": value,
+                            "url": "https://business.gemini.google/",
+                            "secure": True,
+                            "httpOnly": True,
+                        })
+                        cookies.append({
+                            "name": name,
+                            "value": value,
+                            "url": "https://auth.business.gemini.google/",
+                            "secure": True,
+                            "httpOnly": True,
+                        })
+                    elif name.startswith("__Secure-"):
+                        cookies.append({
+                            "name": name,
+                            "value": value,
+                            "domain": ".business.gemini.google",
+                            "path": "/",
+                            "secure": True,
+                            "httpOnly": True,
+                        })
+                    elif name == "NID":
+                        cookies.append({
+                            "name": name,
+                            "value": value,
+                            "domain": ".google.com",
+                            "path": "/",
+                            "secure": True,
+                            "httpOnly": True,
+                        })
+                    else:
+                        cookies.append({
+                            "name": name,
+                            "value": value,
+                            "domain": ".business.gemini.google",
+                            "path": "/",
+                            "secure": True,
+                        })
+        else:
+            secure_c_ses = config.get("secure_c_ses")
+            if secure_c_ses:
+                cookies.append({
+                    "name": "__Secure-C_SES",
+                    "value": secure_c_ses,
+                    "domain": ".business.gemini.google",
+                    "path": "/",
+                    "secure": True,
+                    "httpOnly": True,
+                })
 
-        nid = config.get("nid")
-        if nid:
-            cookies.append({
-                "name": "NID",
-                "value": nid,
-                "domain": ".google.com",
-                "path": "/",
-                "secure": True,
-                "httpOnly": True,
-            })
+            host_c_oses = config.get("host_c_oses")
+            if host_c_oses:
+                cookies.append({
+                    "name": "__Host-C_OSES",
+                    "value": host_c_oses,
+                    "url": "https://business.gemini.google/",
+                    "secure": True,
+                    "httpOnly": True,
+                })
+                cookies.append({
+                    "name": "__Host-C_OSES",
+                    "value": host_c_oses,
+                    "url": "https://auth.business.gemini.google/",
+                    "secure": True,
+                    "httpOnly": True,
+                })
+
+            nid = config.get("nid")
+            if nid:
+                cookies.append({
+                    "name": "NID",
+                    "value": nid,
+                    "domain": ".google.com",
+                    "path": "/",
+                    "secure": True,
+                    "httpOnly": True,
+                })
 
         if cookies:
             await self._context.add_cookies(cookies)
-            logger.debug(f"已设置 {len(cookies)} 个 Cookie")
+            logger.info(f"已设置 {len(cookies)} 个 Cookie")
 
     def _get_random_interval(self) -> float:
         """获取随机化的保活间隔（秒）
@@ -426,63 +482,89 @@ class BrowserKeepAliveService:
 
                 csesidx = config.get("csesidx")
                 getoxsrf_url = f"https://business.gemini.google/auth/getoxsrf?csesidx={csesidx}"
-                logger.info(f"[浏览器保活] 在浏览器中请求 getoxsrf...")
+                logger.info(f"[浏览器保活] 通过浏览器导航访问 getoxsrf...")
 
-                result = await page.evaluate(f"""
-                    async () => {{
-                        try {{
-                            const resp = await fetch('{getoxsrf_url}', {{
-                                credentials: 'include',
-                                headers: {{
-                                    'accept': '*/*',
-                                    'sec-fetch-dest': 'empty',
-                                    'sec-fetch-mode': 'cors',
-                                    'sec-fetch-site': 'same-origin'
-                                }}
-                            }});
-                            const text = await resp.text();
-                            return {{ ok: resp.ok, status: resp.status, text: text, url: resp.url }};
-                        }} catch (e) {{
-                            return {{ error: e.message }};
-                        }}
-                    }}
-                """)
-
-                if result.get("error"):
-                    logger.warning(f"[浏览器保活] getoxsrf 请求失败: {result['error']}")
-                    self._last_error = result["error"]
-                    return False
-
-                if not result.get("ok"):
-                    status_code = result.get("status")
-                    logger.warning(f"[浏览器保活] getoxsrf 返回非 200: status={status_code}")
-
-                    if status_code in (401, 403):
-                        mark_cookie_expired(f"getoxsrf 返回 HTTP {status_code}")
-                        self._notify("cookie_expired", {"status_code": status_code})
-
-                    self._last_error = f"HTTP {status_code}"
-                    return False
-
-                text = result.get("text", "")
-                if text.startswith(")]}'"):
-                    text = text[4:].strip()
-
-                import json
+                getoxsrf_page = await self._context.new_page()
                 try:
-                    data = json.loads(text)
-                except json.JSONDecodeError as e:
-                    logger.warning(f"[浏览器保活] getoxsrf 返回非 JSON: {text[:200]}")
-                    self._last_error = f"JSON 解析失败: {e}"
-                    return False
+                    resp = await getoxsrf_page.goto(getoxsrf_url, timeout=60000, wait_until="networkidle")
 
-                if "keyId" not in data or "xsrfToken" not in data:
-                    logger.warning(f"[浏览器保活] getoxsrf 返回数据缺少必要字段")
-                    mark_cookie_expired("getoxsrf 返回数据缺少 keyId/xsrfToken")
-                    self._last_error = "返回数据缺少 keyId/xsrfToken"
-                    return False
+                    final_url = getoxsrf_page.url
+                    logger.info(f"[浏览器保活] getoxsrf 最终 URL: {final_url}")
 
-                logger.info(f"[浏览器保活] getoxsrf 成功，keyId: {data['keyId'][:20]}...")
+                    if "refreshcookies" in final_url.lower() or "auth.business.gemini.google" in final_url:
+                        logger.info("[浏览器保活] 检测到 refreshcookies 重定向，等待 Cookie 刷新...")
+                        await asyncio.sleep(3)
+
+                        await getoxsrf_page.goto(getoxsrf_url, timeout=60000, wait_until="networkidle")
+                        final_url = getoxsrf_page.url
+                        logger.info(f"[浏览器保活] 第二次请求后 URL: {final_url}")
+
+                    if resp and resp.status != 200:
+                        logger.warning(f"[浏览器保活] getoxsrf 返回非 200: status={resp.status}")
+                        if resp.status in (401, 403):
+                            mark_cookie_expired(f"getoxsrf 返回 HTTP {resp.status}")
+                            self._notify("cookie_expired", {"status_code": resp.status})
+                        self._last_error = f"HTTP {resp.status}"
+                        return False
+
+                    text = await getoxsrf_page.content()
+
+                    import re
+                    json_match = re.search(r'\)\]\}\'\s*(\{.*\})', text, re.DOTALL)
+                    if json_match:
+                        text = json_match.group(1)
+                    elif text.startswith(")]}'"):
+                        text = text[4:].strip()
+
+                    body_match = re.search(r'<body[^>]*>(.*?)</body>', text, re.DOTALL | re.IGNORECASE)
+                    if body_match:
+                        body_text = body_match.group(1).strip()
+                        if body_text.startswith("{"):
+                            text = body_text
+
+                    import json
+                    try:
+                        data = json.loads(text)
+                    except json.JSONDecodeError:
+                        result = await getoxsrf_page.evaluate(f"""
+                            async () => {{
+                                try {{
+                                    const resp = await fetch('{getoxsrf_url}', {{
+                                        credentials: 'include'
+                                    }});
+                                    const text = await resp.text();
+                                    return {{ ok: resp.ok, status: resp.status, text: text }};
+                                }} catch (e) {{
+                                    return {{ error: e.message }};
+                                }}
+                            }}
+                        """)
+
+                        if result.get("error") or not result.get("ok"):
+                            logger.warning(f"[浏览器保活] fetch getoxsrf 失败: {result}")
+                            self._last_error = result.get("error") or f"HTTP {result.get('status')}"
+                            return False
+
+                        text = result.get("text", "")
+                        if text.startswith(")]}'"):
+                            text = text[4:].strip()
+
+                        try:
+                            data = json.loads(text)
+                        except json.JSONDecodeError as e:
+                            logger.warning(f"[浏览器保活] getoxsrf 返回非 JSON: {text[:200]}")
+                            self._last_error = f"JSON 解析失败: {e}"
+                            return False
+
+                    if "keyId" not in data or "xsrfToken" not in data:
+                        logger.warning(f"[浏览器保活] getoxsrf 返回数据缺少必要字段: {list(data.keys())}")
+                        mark_cookie_expired("getoxsrf 返回数据缺少 keyId/xsrfToken")
+                        self._last_error = "返回数据缺少 keyId/xsrfToken"
+                        return False
+
+                    logger.info(f"[浏览器保活] getoxsrf 成功，keyId: {data['keyId'][:20]}...")
+                finally:
+                    await getoxsrf_page.close()
 
                 cookies = await self._context.cookies()
                 new_config = self._extract_cookies(cookies, current_url)
@@ -730,47 +812,103 @@ async def try_refresh_cookie_via_browser(headless: bool = True) -> dict:
             logger.info("[自动登录] 正在访问目标页面...")
             await page.goto(TARGET_URL, timeout=60000, wait_until="domcontentloaded")
 
-            # 第二步：设置 Cookie（在正确的域名上下文中）
             cookies = []
 
-            secure_c_ses = config.get("secure_c_ses")
-            if secure_c_ses:
-                cookies.append({
-                    "name": "__Secure-C_SES",
-                    "value": secure_c_ses,
-                    "domain": "business.gemini.google",
-                    "path": "/",
-                    "secure": True,
-                    "httpOnly": True,
-                })
+            cookie_raw = config.get("cookie_raw")
+            if cookie_raw:
+                for part in cookie_raw.split(";"):
+                    part = part.strip()
+                    if "=" in part:
+                        name, value = part.split("=", 1)
+                        name = name.strip()
+                        value = value.strip()
 
-            host_c_oses = config.get("host_c_oses")
-            if host_c_oses:
-                cookies.append({
-                    "name": "__Host-C_OSES",
-                    "value": host_c_oses,
-                    "domain": "business.gemini.google",
-                    "path": "/",
-                    "secure": True,
-                    "httpOnly": True,
-                })
+                        if name.startswith("__Host-"):
+                            cookies.append({
+                                "name": name,
+                                "value": value,
+                                "url": "https://business.gemini.google/",
+                                "secure": True,
+                                "httpOnly": True,
+                            })
+                            cookies.append({
+                                "name": name,
+                                "value": value,
+                                "url": "https://auth.business.gemini.google/",
+                                "secure": True,
+                                "httpOnly": True,
+                            })
+                        elif name.startswith("__Secure-"):
+                            cookies.append({
+                                "name": name,
+                                "value": value,
+                                "domain": ".business.gemini.google",
+                                "path": "/",
+                                "secure": True,
+                                "httpOnly": True,
+                            })
+                        elif name == "NID":
+                            cookies.append({
+                                "name": name,
+                                "value": value,
+                                "domain": ".google.com",
+                                "path": "/",
+                                "secure": True,
+                                "httpOnly": True,
+                            })
+                        else:
+                            cookies.append({
+                                "name": name,
+                                "value": value,
+                                "domain": ".business.gemini.google",
+                                "path": "/",
+                                "secure": True,
+                            })
+            else:
+                secure_c_ses = config.get("secure_c_ses")
+                if secure_c_ses:
+                    cookies.append({
+                        "name": "__Secure-C_SES",
+                        "value": secure_c_ses,
+                        "domain": ".business.gemini.google",
+                        "path": "/",
+                        "secure": True,
+                        "httpOnly": True,
+                    })
 
-            nid = config.get("nid")
-            if nid:
-                cookies.append({
-                    "name": "NID",
-                    "value": nid,
-                    "domain": ".google.com",
-                    "path": "/",
-                    "secure": True,
-                    "httpOnly": True,
-                })
+                host_c_oses = config.get("host_c_oses")
+                if host_c_oses:
+                    cookies.append({
+                        "name": "__Host-C_OSES",
+                        "value": host_c_oses,
+                        "url": "https://business.gemini.google/",
+                        "secure": True,
+                        "httpOnly": True,
+                    })
+                    cookies.append({
+                        "name": "__Host-C_OSES",
+                        "value": host_c_oses,
+                        "url": "https://auth.business.gemini.google/",
+                        "secure": True,
+                        "httpOnly": True,
+                    })
+
+                nid = config.get("nid")
+                if nid:
+                    cookies.append({
+                        "name": "NID",
+                        "value": nid,
+                        "domain": ".google.com",
+                        "path": "/",
+                        "secure": True,
+                        "httpOnly": True,
+                    })
 
             if cookies:
                 await context.add_cookies(cookies)
                 logger.info(f"[自动登录] 已设置 {len(cookies)} 个 Cookie")
 
-            # 第三步：重新访问目标页面（带上 Cookie）
+            # 重新访问目标页面（带上 Cookie）
             logger.info("[自动登录] 重新访问目标页面...")
             await page.goto(TARGET_URL, timeout=60000)
             await page.wait_for_load_state("networkidle", timeout=30000)
