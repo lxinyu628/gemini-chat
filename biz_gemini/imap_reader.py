@@ -284,8 +284,69 @@ class IMAPReader:
             else:
                 logger.debug("[IMAP] 主正则未匹配")
 
+            # 增强：参考 auto_login_with_email.py 的行级匹配逻辑
+            # 先按行精确匹配提示语，避免误匹配
+            lines = body.splitlines()
+            for line in lines:
+                line_lower = line.lower()
+                idx = -1
+
+                # 中文提示语
+                if "一次性验证码为" in line:
+                    idx = line.index("一次性验证码为")
+                elif "一次性验证为" in line:  # 处理被截断的情况
+                    idx = line.index("一次性验证为")
+                elif "验证码为" in line:
+                    idx = line.index("验证码为")
+                elif "验证为" in line:  # 处理被截断的情况
+                    idx = line.index("验证为")
+                elif "您的验证码是" in line:
+                    idx = line.index("您的验证码是")
+                # 英文提示语
+                elif "your one-time verification code is" in line_lower:
+                    idx = line_lower.index("your one-time verification code is")
+                elif "verification code is" in line_lower:
+                    idx = line_lower.index("verification code is")
+                elif "one-time verification code is" in line_lower:
+                    idx = line_lower.index("one-time verification code is")
+
+                if idx >= 0:
+                    # 只在提示语之后的子串中查找
+                    sub = line[idx:]
+                    candidates = re.findall(r'[A-Z0-9]{6}', sub, re.IGNORECASE)
+                    if candidates:
+                        code = candidates[0].strip().upper()
+                        # 要求：长度恰好 6，且至少包含一个字母（避免纯数字 ID 被误匹配）
+                        if len(code) == 6 and any(c.isalpha() for c in code):
+                            logger.info(f"[IMAP] ✓ 行级匹配到验证码: {code} (来源行: {line.strip()[:80]}...)")
+                            return code
+
+            # 备用：全局模式匹配（参考 auto_login_with_email.py）
+            global_patterns = [
+                # 中文模式
+                (r'一次性验证码为[：:]\s*([A-Z0-9]{6})', '中文-一次性验证码为'),
+                (r'一次性验证为[：:]\s*([A-Z0-9]{6})', '中文-一次性验证为'),
+                (r'验证码为[：:]\s*([A-Z0-9]{6})', '中文-验证码为'),
+                (r'验证为[：:]\s*([A-Z0-9]{6})', '中文-验证为'),
+                (r'验证码[：:是]\s*([A-Z0-9]{6})', '中文-验证码'),
+                (r'您的验证码是[：:]\s*([A-Z0-9]{6})', '中文-您的验证码是'),
+                # 英文模式
+                (r'your one-time verification code is[：:]\s*([A-Z0-9]{6})', '英文-one-time code'),
+                (r'one-time verification code is[：:]\s*([A-Z0-9]{6})', '英文-one-time'),
+                (r'verification code is[：:]\s*([A-Z0-9]{6})', '英文-verification code'),
+                (r'code is[：:]\s*([A-Z0-9]{6})', '英文-code is'),
+            ]
+
+            logger.debug("[IMAP] 尝试全局模式匹配...")
+            for pattern, desc in global_patterns:
+                match = re.search(pattern, body, re.IGNORECASE)
+                if match:
+                    code = match.group(1).strip().upper()
+                    if len(code) == 6 and any(c.isalpha() for c in code):
+                        logger.info(f"[IMAP] ✓ 全局模式 [{desc}] 匹配成功，验证码: {code}")
+                        return code
+
             # 备用：尝试匹配 HTML 中常见的验证码格式
-            # 注意：移除了过于宽松的 \b([A-Z0-9]{6})\b 模式，避免误匹配
             backup_patterns = [
                 (r'verification-code[^>]*>([A-Z0-9]{6})<', 'verification-code'),
                 (r'code[^>]*>([A-Z0-9]{6})<', 'code tag'),
@@ -294,15 +355,17 @@ class IMAPReader:
                 (r'>\s*([A-Z0-9]{6})\s*</div>', 'div tag'),
             ]
 
-            logger.debug("[IMAP] 尝试备用正则匹配...")
+            logger.debug("[IMAP] 尝试 HTML 标签模式匹配...")
             for pattern, desc in backup_patterns:
                 match = re.search(pattern, body, re.IGNORECASE)
                 if match:
                     code = match.group(1).upper()
-                    logger.info(f"[IMAP] ✓ 备用模式 [{desc}] 匹配成功，验证码: {code}")
-                    return code
-                else:
-                    logger.debug(f"[IMAP]   模式 [{desc}] 未匹配")
+                    # 验证码需要至少包含一个字母
+                    if any(c.isalpha() for c in code):
+                        logger.info(f"[IMAP] ✓ HTML 模式 [{desc}] 匹配成功，验证码: {code}")
+                        return code
+                    else:
+                        logger.debug(f"[IMAP]   模式 [{desc}] 匹配到 {code}，但不含字母，跳过")
 
             logger.debug("[IMAP] 所有正则模式均未匹配到验证码")
             return None

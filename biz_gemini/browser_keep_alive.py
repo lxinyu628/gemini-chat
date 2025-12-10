@@ -1282,21 +1282,45 @@ async def _extract_and_save_cookies(context, current_url: str, captured_csesidx:
         else:
             logger.warning("[自动登录] 未能获取 csesidx，Cookie 可能无法正常使用")
 
-        # 关键步骤：在浏览器中访问 getoxsrf 端点，触发 Cookie 刷新
-        # 这样可以确保 Cookie 被 Google 服务器正确刷新，避免后续 httpx 请求时返回 302
+        # 关键步骤：在浏览器中访问主页，确保 Cookie 被正确激活
+        # 参考 remote_browser.py 的做法，不直接调用 getoxsrf，而是让浏览器自然完成 Cookie 刷新
         if csesidx:
             try:
-                logger.info("[自动登录] 在浏览器中访问 getoxsrf 端点以刷新 Cookie...")
+                logger.info("[自动登录] 在浏览器中访问主页以激活 Cookie...")
                 page = await context.new_page()
                 try:
-                    getoxsrf_url = f"https://business.gemini.google/auth/getoxsrf?csesidx={csesidx}"
-                    await page.goto(getoxsrf_url, timeout=30000, wait_until="domcontentloaded")
-                    await asyncio.sleep(1)  # 等待 Cookie 刷新完成
-                    logger.info("[自动登录] getoxsrf 访问完成")
+                    # 访问主页，让浏览器自动处理所有重定向和 Cookie 刷新
+                    await page.goto("https://business.gemini.google/", timeout=60000, wait_until="networkidle")
+                    await asyncio.sleep(3)  # 等待页面完全加载
+
+                    current_url = page.url
+                    logger.info(f"[自动登录] 主页访问后 URL: {current_url}")
+
+                    # 如果被重定向到登录页或 refreshcookies，说明 Cookie 还没有完全激活
+                    if "auth" in current_url.lower() or "refreshcookies" in current_url.lower():
+                        logger.info("[自动登录] 检测到重定向，等待 Cookie 刷新...")
+                        await asyncio.sleep(5)
+
+                        # 再次访问主页
+                        await page.goto("https://business.gemini.google/", timeout=60000, wait_until="networkidle")
+                        await asyncio.sleep(2)
+                        current_url = page.url
+                        logger.info(f"[自动登录] 第二次访问主页后 URL: {current_url}")
+
+                    # 如果成功到达主页，尝试从 URL 中提取 csesidx（可能会更新）
+                    import re
+                    match = re.search(r'csesidx[=:](\d+)', current_url)
+                    if match:
+                        new_csesidx = match.group(1)
+                        if new_csesidx != csesidx:
+                            logger.info(f"[自动登录] csesidx 已更新: {csesidx} -> {new_csesidx}")
+                            csesidx = new_csesidx
+
+                    logger.info("[自动登录] Cookie 激活完成")
                 finally:
                     await page.close()
             except Exception as e:
-                logger.warning(f"[自动登录] 访问 getoxsrf 失败（可忽略）: {e}")
+                logger.warning(f"[自动登录] 访问主页失败: {e}")
 
         # 重新获取 Cookie（可能已被 getoxsrf 更新）
         browser_cookies = await context.cookies()
