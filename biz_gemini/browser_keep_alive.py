@@ -818,17 +818,29 @@ async def _auto_login_flow(page, context, config: dict) -> dict:
         verification_handled = False
 
         # 关键：在登录过程中捕获 csesidx（它只在中间页面的 URL 中出现）
-        captured_csesidx = None
+        # 使用列表以便在回调中修改
+        captured_csesidx_holder = [None]
+
+        # 注册导航事件监听器，捕获所有经过的 URL（包括重定向）
+        def on_frame_navigated(frame):
+            if frame == page.main_frame:
+                url = frame.url
+                if "csesidx=" in url and not captured_csesidx_holder[0]:
+                    csesidx = url.split("csesidx=", 1)[1].split("&", 1)[0]
+                    captured_csesidx_holder[0] = csesidx
+                    logger.info(f"[自动登录] 通过导航事件捕获到 csesidx: {csesidx} (URL: {url[:100]})")
+
+        page.on("framenavigated", on_frame_navigated)
 
         loop_count = 0
         while asyncio.get_event_loop().time() - start_time < max_wait_seconds:
             loop_count += 1
             current_url = page.url
 
-            # 尝试从当前 URL 捕获 csesidx（登录过程中的中间页面会包含它）
-            if "csesidx=" in current_url and not captured_csesidx:
-                captured_csesidx = current_url.split("csesidx=", 1)[1].split("&", 1)[0]
-                logger.info(f"[自动登录] 捕获到 csesidx: {captured_csesidx}")
+            # 也从当前 URL 尝试捕获（作为备份）
+            if "csesidx=" in current_url and not captured_csesidx_holder[0]:
+                captured_csesidx_holder[0] = current_url.split("csesidx=", 1)[1].split("&", 1)[0]
+                logger.info(f"[自动登录] 从当前 URL 捕获到 csesidx: {captured_csesidx_holder[0]}")
 
             # 调试日志：每5次循环或重要状态变化时输出
             is_main = _is_main_page(current_url)
@@ -838,13 +850,15 @@ async def _auto_login_flow(page, context, config: dict) -> dict:
             # 每5次循环输出一次日志，避免刷屏
             if loop_count % 5 == 1:
                 logger.info(f"[自动登录] 循环#{loop_count} URL: {current_url[:100]}")
-                logger.info(f"[自动登录] 状态: main={is_main}, verif={is_verif}, login={is_login}, email_done={email_input_handled}, code_done={verification_handled}, csesidx={captured_csesidx}")
+                logger.info(f"[自动登录] 状态: main={is_main}, verif={is_verif}, login={is_login}, email_done={email_input_handled}, code_done={verification_handled}, csesidx={captured_csesidx_holder[0]}")
 
             # 检查是否已到达主页（登录成功）
             if _is_main_page(current_url):
-                logger.info("[自动登录] ✓ 登录成功，已到达主页")
+                logger.info(f"[自动登录] ✓ 登录成功，已到达主页，csesidx={captured_csesidx_holder[0]}")
+                # 移除事件监听器
+                page.remove_listener("framenavigated", on_frame_navigated)
                 # 传递捕获的 csesidx
-                return await _extract_and_save_cookies(context, current_url, captured_csesidx=captured_csesidx)
+                return await _extract_and_save_cookies(context, current_url, captured_csesidx=captured_csesidx_holder[0])
             
             # 检查是否在验证码页面
             if _is_verification_page(current_url) and not verification_handled:
@@ -902,16 +916,26 @@ async def _auto_login_flow(page, context, config: dict) -> dict:
         
         # 超时
         logger.warning("[自动登录] 登录超时")
+        # 移除事件监听器
+        try:
+            page.remove_listener("framenavigated", on_frame_navigated)
+        except Exception:
+            pass
         return {
             "success": False,
             "message": "自动登录超时（3分钟）",
             "needs_manual_login": True,
         }
-        
+
     except Exception as e:
         import traceback
         logger.error(f"[自动登录] 自动登录流程异常: {e}")
         logger.error(f"[自动登录] 堆栈追踪:\n{traceback.format_exc()}")
+        # 移除事件监听器
+        try:
+            page.remove_listener("framenavigated", on_frame_navigated)
+        except Exception:
+            pass
         return {
             "success": False,
             "message": str(e),
