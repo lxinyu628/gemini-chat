@@ -778,19 +778,19 @@ async def try_refresh_cookie_via_browser(headless: bool = True) -> dict:
 
 async def _auto_login_flow(page, context, config: dict) -> dict:
     """自动登录流程
-    
+
     流程：
     1. 检测到登录页
     2. 输入邮箱并点击下一步
     3. 等待验证码页面
     4. 从 IMAP 获取验证码
     5. 填充验证码并提交
-    
+
     Args:
         page: Playwright 页面对象
         context: Playwright 上下文对象
         config: 配置字典
-        
+
     Returns:
         {"success": bool, "message": str, "needs_manual_login": bool}
     """
@@ -798,7 +798,7 @@ async def _auto_login_flow(page, context, config: dict) -> dict:
         # 获取保存的用户邮箱
         session_config = config.get("session", {})
         username = session_config.get("username")
-        
+
         if not username:
             logger.warning("[自动登录] 未找到保存的用户邮箱，无法自动登录")
             return {
@@ -806,36 +806,45 @@ async def _auto_login_flow(page, context, config: dict) -> dict:
                 "message": "未找到保存的用户邮箱，请先手动登录一次",
                 "needs_manual_login": True,
             }
-        
+
         logger.info(f"[自动登录] 使用邮箱: {username}")
-        
+
         # 等待页面加载
         await asyncio.sleep(2)
-        
+
         max_wait_seconds = 180  # 最多等待 3 分钟
         start_time = asyncio.get_event_loop().time()
         email_input_handled = False
         verification_handled = False
-        
+
+        # 关键：在登录过程中捕获 csesidx（它只在中间页面的 URL 中出现）
+        captured_csesidx = None
+
         loop_count = 0
         while asyncio.get_event_loop().time() - start_time < max_wait_seconds:
             loop_count += 1
             current_url = page.url
-            
+
+            # 尝试从当前 URL 捕获 csesidx（登录过程中的中间页面会包含它）
+            if "csesidx=" in current_url and not captured_csesidx:
+                captured_csesidx = current_url.split("csesidx=", 1)[1].split("&", 1)[0]
+                logger.info(f"[自动登录] 捕获到 csesidx: {captured_csesidx}")
+
             # 调试日志：每5次循环或重要状态变化时输出
             is_main = _is_main_page(current_url)
             is_verif = _is_verification_page(current_url)
             is_login = _is_login_page(current_url)
-            
+
             # 每5次循环输出一次日志，避免刷屏
             if loop_count % 5 == 1:
                 logger.info(f"[自动登录] 循环#{loop_count} URL: {current_url[:100]}")
-                logger.info(f"[自动登录] 状态: main={is_main}, verif={is_verif}, login={is_login}, email_done={email_input_handled}, code_done={verification_handled}")
-            
+                logger.info(f"[自动登录] 状态: main={is_main}, verif={is_verif}, login={is_login}, email_done={email_input_handled}, code_done={verification_handled}, csesidx={captured_csesidx}")
+
             # 检查是否已到达主页（登录成功）
             if _is_main_page(current_url):
                 logger.info("[自动登录] ✓ 登录成功，已到达主页")
-                return await _extract_and_save_cookies(context, current_url)
+                # 传递捕获的 csesidx
+                return await _extract_and_save_cookies(context, current_url, captured_csesidx=captured_csesidx)
             
             # 检查是否在验证码页面
             if _is_verification_page(current_url) and not verification_handled:
@@ -1088,21 +1097,60 @@ def _is_main_page(url: str) -> bool:
     return False
 
 
-async def _extract_and_save_cookies(context, current_url: str) -> dict:
+async def _extract_and_save_cookies(context, current_url: str, captured_csesidx: str = None) -> dict:
     """提取并保存 Cookie
 
     Args:
         context: Playwright 上下文对象
         current_url: 当前页面 URL
+        captured_csesidx: 在登录过程中捕获的 csesidx（可选，优先使用）
 
     Returns:
         {"success": bool, "message": str, "needs_manual_login": bool}
     """
     try:
-        # 提取 csesidx（在访问 getoxsrf 之前需要）
-        csesidx = None
-        if "csesidx=" in current_url:
+        # 提取 csesidx：优先使用传入的 captured_csesidx，其次从 URL 提取
+        csesidx = captured_csesidx
+        if not csesidx and "csesidx=" in current_url:
             csesidx = current_url.split("csesidx=", 1)[1].split("&", 1)[0]
+
+        # 如果仍然没有 csesidx，尝试通过浏览器访问 list-sessions 获取
+        if not csesidx:
+            logger.info("[自动登录] 未捕获到 csesidx，尝试从 list-sessions 获取...")
+            try:
+                page = await context.new_page()
+                try:
+                    # 访问 list-sessions 页面
+                    list_sessions_url = "https://auth.business.gemini.google/list-sessions?rt=json"
+                    response = await page.goto(list_sessions_url, timeout=30000)
+                    if response and response.ok:
+                        text = await page.content()
+                        # 解析 JSON（可能有前缀）
+                        import json
+                        if ")]}'\\n" in text:
+                            text = text.split(")]}'\\n", 1)[1]
+                        elif ")]}'" in text:
+                            text = text.split(")]}'", 1)[1]
+                        # 尝试从 <pre> 标签中提取
+                        if "<pre>" in text:
+                            text = text.split("<pre>", 1)[1].split("</pre>", 1)[0]
+                        try:
+                            data = json.loads(text.strip())
+                            sessions = data.get("sessions", [])
+                            if sessions:
+                                csesidx = str(sessions[0].get("csesidx", ""))
+                                logger.info(f"[自动登录] 从 list-sessions 获取到 csesidx: {csesidx}")
+                        except json.JSONDecodeError:
+                            logger.warning(f"[自动登录] 解析 list-sessions 响应失败")
+                finally:
+                    await page.close()
+            except Exception as e:
+                logger.warning(f"[自动登录] 从 list-sessions 获取 csesidx 失败: {e}")
+
+        if csesidx:
+            logger.info(f"[自动登录] 使用 csesidx: {csesidx}")
+        else:
+            logger.warning("[自动登录] 未能获取 csesidx，Cookie 可能无法正常使用")
 
         # 关键步骤：在浏览器中访问 getoxsrf 端点，触发 Cookie 刷新
         # 这样可以确保 Cookie 被 Google 服务器正确刷新，避免后续 httpx 请求时返回 302
