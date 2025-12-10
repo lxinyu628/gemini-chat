@@ -2072,7 +2072,7 @@ body {
   margin-bottom: 16px;
   background-color: var(--bg-secondary);
   border-left: 3px solid #0842a0;
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  border-radius: var(--radius-sm);
   font-size: 14px;
   color: var(--text-secondary);
 }
@@ -2086,7 +2086,7 @@ body {
 }
 
 /* Toggle Switch 开关样式 */
-.toggle-switch {
+.form-group .toggle-switch {
   display: flex;
   align-items: center;
   gap: 12px;
@@ -2113,7 +2113,8 @@ body {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  top: 2px;
+  top: 50%;
+  transform: translateY(-50%);
   left: 2px;
   background-color: white;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
@@ -2125,7 +2126,7 @@ body {
 }
 
 .toggle-switch input[type="checkbox"]:checked::before {
-  transform: translateX(18px);
+  transform: translateX(18px) translateY(-50%);
 }
 
 .toggle-text {
