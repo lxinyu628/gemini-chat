@@ -133,7 +133,7 @@ class KeepAliveService:
                 return
 
             if is_cookie_expired():
-                logger.warning("Cookie 已标记为过期，跳过 JWT 刷新")
+                logger.debug("Cookie 已标记为过期，跳过 JWT 刷新")
                 self._cookie_expired = True
                 self._session_valid = False
                 self._last_check = datetime.now()
@@ -165,7 +165,7 @@ class KeepAliveService:
                     "username": self._session_username,
                 })
             else:
-                logger.warning("浏览器刷新失败")
+                logger.debug("浏览器刷新失败")
                 self._session_valid = False
 
         except Exception as e:
@@ -208,11 +208,11 @@ class KeepAliveService:
                 self._notify("cookie_refreshed", {"method": "browser"})
                 return True
             elif result.get("needs_manual_login"):
-                logger.warning("需要手动登录")
+                logger.info("Cookie 已失效，需要手动登录")
                 self._notify("needs_manual_login", {"message": result.get("message")})
                 return False
             else:
-                logger.warning(f"浏览器刷新失败: {result.get('message')}")
+                logger.debug(f"浏览器刷新失败: {result.get('message')}")
                 return False
 
         except ImportError:

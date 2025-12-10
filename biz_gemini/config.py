@@ -441,7 +441,7 @@ def mark_cookie_expired(reason: str = "") -> None:
         _account_state["available"] = False
         if reason:
             _account_state["cooldown_reason"] = reason
-    logger.warning(f"Cookie 已标记为过期: {reason}")
+    logger.info(f"Cookie 已标记为过期: {reason}")
 
 
 def mark_cookie_valid() -> None:

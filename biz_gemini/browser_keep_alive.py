@@ -493,7 +493,7 @@ class BrowserKeepAliveService:
                 is_login_page = any(host in current_url for host in LOGIN_HOSTS)
 
                 if is_login_page:
-                    logger.warning("访问被重定向到登录页，Cookie 可能已过期")
+                    logger.info("Cookie 已过期，需要重新登录")
                     mark_cookie_expired("浏览器保活检测到登录页重定向")
                     self._notify("cookie_expired", {"url": current_url})
 
@@ -675,10 +675,8 @@ class BrowserKeepAliveService:
 
             if name == "__Secure-C_SES":
                 secure_c_ses = value
-                logger.debug(f"[Cookie提取] __Secure-C_SES: domain={cookie_domain}, value={value[:30]}...")
             elif name == "__Host-C_OSES":
                 host_c_oses = value
-                logger.debug(f"[Cookie提取] __Host-C_OSES: domain={cookie_domain}, value={value[:30]}...")
             elif name == "NID":
                 nid = value
 
@@ -785,8 +783,7 @@ async def try_refresh_cookie_via_browser(headless: bool = True) -> dict:
     # auto_login 配置在 imap 对象中
     auto_login_enabled = imap_config.get("auto_login", False)
     
-    # 调试日志
-    logger.info(f"[自动登录] 配置检查: imap_enabled={imap_enabled}, auto_login_enabled={auto_login_enabled}")
+    logger.debug(f"[自动登录] 配置检查: imap_enabled={imap_enabled}, auto_login_enabled={auto_login_enabled}")
 
     # Playwright 不支持 socks5h://
     playwright_proxy = proxy
@@ -969,17 +966,13 @@ async def try_refresh_cookie_via_browser(headless: bool = True) -> dict:
             is_login_page = any(host in current_url for host in LOGIN_HOSTS)
 
             if is_login_page:
-                logger.warning(f"[自动登录] 被重定向到登录页: {current_url}")
+                logger.info(f"[自动登录] 检测到登录页，Cookie 已过期")
                 
                 # 如果启用了自动登录和 IMAP，尝试自动完成登录
                 if auto_login_enabled and imap_enabled:
                     logger.info("[自动登录] 尝试自动完成登录流程...")
                     result = await _auto_login_flow(page, context, config)
-                    if result["success"]:
-                        return result
-                    else:
-                        logger.warning(f"[自动登录] 自动登录失败: {result.get('message')}")
-                        return result
+                    return result
                 else:
                     reason = []
                     if not auto_login_enabled:
@@ -1067,14 +1060,14 @@ async def _auto_login_flow(page, context, config: dict) -> dict:
             if frame == page.main_frame:
                 url = frame.url
                 all_navigated_urls.append(url)
-                logger.info(f"[自动登录] 页面导航: {url}")
+                logger.debug(f"[自动登录] 页面导航: {url}")
                 # 支持 csesidx= 和 csesidx: 两种格式
                 if not captured_csesidx_holder[0]:
                     import re
                     match = re.search(r'csesidx[=:](\d+)', url)
                     if match:
                         captured_csesidx_holder[0] = match.group(1)
-                        logger.info(f"[自动登录] ★ 捕获到 csesidx: {captured_csesidx_holder[0]}")
+                        logger.debug(f"[自动登录] 捕获到 csesidx: {captured_csesidx_holder[0]}")
 
         page.on("framenavigated", on_frame_navigated)
 
@@ -1089,25 +1082,20 @@ async def _auto_login_flow(page, context, config: dict) -> dict:
                 match = re.search(r'csesidx[=:](\d+)', current_url)
                 if match:
                     captured_csesidx_holder[0] = match.group(1)
-                    logger.info(f"[自动登录] 从当前 URL 捕获到 csesidx: {captured_csesidx_holder[0]}")
+                    logger.debug(f"[自动登录] 从当前 URL 捕获到 csesidx: {captured_csesidx_holder[0]}")
 
-            # 调试日志：每5次循环或重要状态变化时输出
+            # 检查页面状态
             is_main = _is_main_page(current_url)
             is_verif = _is_verification_page(current_url)
             is_login = _is_login_page(current_url)
 
-            # 每5次循环输出一次日志，避免刷屏
-            if loop_count % 5 == 1:
-                logger.info(f"[自动登录] 循环#{loop_count} URL: {current_url[:100]}")
-                logger.info(f"[自动登录] 状态: main={is_main}, verif={is_verif}, login={is_login}, email_done={email_input_handled}, code_done={verification_handled}, csesidx={captured_csesidx_holder[0]}")
+            # 每30次循环输出一次日志，避免刷屏
+            if loop_count % 30 == 1:
+                logger.debug(f"[自动登录] 等待中... (已等待 {int((asyncio.get_event_loop().time() - start_time))}秒)")
 
             # 检查是否已到达主页（登录成功）
             if _is_main_page(current_url):
-                logger.info(f"[自动登录] ✓ 登录成功，已到达主页")
-                logger.info(f"[自动登录] 捕获的 csesidx: {captured_csesidx_holder[0]}")
-                logger.info(f"[自动登录] 所有导航过的 URL ({len(all_navigated_urls)} 个):")
-                for i, url in enumerate(all_navigated_urls):
-                    logger.info(f"[自动登录]   [{i+1}] {url}")
+                logger.info("[自动登录] ✓ 登录成功")
                 # 移除事件监听器
                 page.remove_listener("framenavigated", on_frame_navigated)
                 # 传递捕获的 csesidx
@@ -1159,17 +1147,11 @@ async def _auto_login_flow(page, context, config: dict) -> dict:
                         "needs_manual_login": True,
                     }
             
-            # 如果邮箱已输入但页面既不是验证码页面也不是登录页面，记录警告
-            if email_input_handled and not is_verif and not is_login and not is_main:
-                if loop_count % 10 == 1:
-                    logger.warning(f"[自动登录] 未识别的页面状态，URL: {current_url}")
-            
+
             # 等待页面变化
             await asyncio.sleep(2)
         
-        # 超时
-        logger.warning("[自动登录] 登录超时")
-        # 移除事件监听器
+        # 超时，移除事件监听器
         try:
             page.remove_listener("framenavigated", on_frame_navigated)
         except Exception:
@@ -1405,7 +1387,7 @@ async def refresh_session_via_browser(context, config: dict) -> dict:
         logger.info(f"[浏览器保活] 当前 URL: {current_url}")
 
         if any(host in current_url for host in LOGIN_HOSTS):
-            logger.warning("[浏览器保活] 被重定向到登录页，Cookie 已过期")
+            logger.info("[浏览器保活] Cookie 已过期，需要重新登录")
             return {"success": False, "jwt_data": None, "error": "Cookie 已过期，需要重新登录"}
 
         getoxsrf_url = f"https://business.gemini.google/auth/getoxsrf?csesidx={csesidx}"
@@ -1495,7 +1477,7 @@ async def check_session_via_browser(context, config: dict) -> dict:
 
         current_url = page.url
         if any(host in current_url for host in LOGIN_HOSTS):
-            logger.warning("[浏览器保活] 被重定向到登录页，Cookie 已过期")
+            logger.info("[浏览器保活] Cookie 已过期，需要重新登录")
             return {"valid": False, "expired": True, "username": None, "error": "Cookie 已过期"}
 
         list_sessions_url = f"https://auth.business.gemini.google/list-sessions?csesidx={csesidx}&rt=json"
@@ -1780,7 +1762,7 @@ async def _extract_and_save_cookies(context, current_url: str, captured_csesidx:
                             except json.JSONDecodeError as e:
                                 logger.warning(f"[自动登录] 解析 list-sessions 响应失败: {e}")
                         else:
-                            logger.warning(f"[自动登录] list-sessions 请求失败: status={result.get('status')}")
+                            logger.debug(f"[自动登录] list-sessions 请求失败: status={result.get('status')}")
                     except Exception as e:
                         logger.warning(f"[自动登录] 获取 list-sessions 失败: {e}")
 

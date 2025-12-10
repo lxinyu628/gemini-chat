@@ -59,6 +59,12 @@
 - ✅ **Web 管理界面** - 美观的聊天界面，支持图片生成和管理
 - ✅ **多会话管理** - 支持多个独立对话会话，历史记录同步
 
+### 自动化运维
+
+- 🔄 **浏览器保活** - 自动刷新 Cookie，避免 24 小时过期
+- 📧 **IMAP 验证码自动获取** - 配合保活实现无人值守自动登录
+- 🎯 **智能重试** - 登录失败自动重试，极大提高可用性
+
 ### 安全与管理
 
 - 🔒 **API Key 管理** - 可创建、查看、删除 API Key
@@ -145,6 +151,17 @@ cp config.example.json config.json
   "security": {
     "admin_password": "",
     "require_api_key": false
+  },
+  "imap": {
+    "enabled": false,
+    "host": "imap.example.com",
+    "port": 993,
+    "user": "your-email@example.com",
+    "password": "your-password",
+    "use_ssl": true,
+    "folder": "INBOX",
+    "sender_filter": "noreply-googlecloud@google.com",
+    "auto_login": true
   },
   "redis": {
     "enabled": false,
@@ -488,6 +505,21 @@ GET /v1/models
     "password": "", // Redis 密码
     "db": 0, // Redis 数据库编号
     "key_prefix": "gemini_chat:" // Redis key 前缀
+  },
+  "imap": {
+    "enabled": false, // 是否启用 IMAP 验证码自动获取
+    "host": "imap.example.com", // IMAP 服务器地址
+    "port": 993, // IMAP 端口
+    "user": "", // 邮箱账号
+    "password": "", // 邮箱密码或授权码
+    "use_ssl": true, // 是否使用 SSL
+    "folder": "INBOX", // 邮箱文件夹
+    "sender_filter": "noreply-googlecloud@google.com", // 发件人过滤
+    "code_pattern": "class=\"x_verification-code\">([A-Z0-9]{6})</span>", // 验证码正则
+    "max_age_seconds": 300, // 只查找最近 5 分钟的邮件
+    "timeout_seconds": 180, // 等待验证码超时（3 分钟）
+    "poll_interval": 5, // 轮询间隔（秒）
+    "auto_login": true // 配合保活使用：过期时自动登录
   }
 }
 ```
@@ -779,3 +811,11 @@ MIT License
 ---
 
 **开发者**: [ccpopy](https://github.com/ccpopy)
+
+## 🙏 鸣谢
+
+感谢以下开发者和项目的贡献：
+
+- **[xxoo-qx/business-gemini](https://github.com/xxoo-qx/business-gemini)** - 参考了浏览器保活机制的实现
+- **beings** - 提供了 Gemini Enterprise 2 API 关键 JWT 加密 key 以及流程思路（[参考文章](https://linux.do/t/topic/1223671)）
+- **lckwei** - 提供了 Gemini Business 2 API 简单版实现（[参考文章](https://linux.do/t/topic/1225005)）

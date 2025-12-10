@@ -847,10 +847,34 @@ async def get_imap_config() -> dict:
         imap_config = config.get("imap", {})
         keep_alive_config = config.get("browser_keep_alive", {})
         
-        # 脱敏密码
+        # 脱敏密码和邮箱
         safe_config = {**imap_config}
         if safe_config.get("password"):
             safe_config["password"] = "******"
+        
+        # 脱敏邮箱地址（保护隐私，防止垃圾邮件）
+        if safe_config.get("user"):
+            user = safe_config["user"]
+            if "@" in user:
+                local_part, domain = user.split("@", 1)
+                # 脱敏本地部分：保留首字符，中间用*替代
+                if len(local_part) > 2:
+                    masked_local = local_part[0] + "*" * (len(local_part) - 2) + local_part[-1]
+                elif len(local_part) > 0:
+                    masked_local = local_part[0] + "*" * (len(local_part) - 1)
+                else:
+                    masked_local = "*"
+                # 脱敏域名部分：保留首字符和后缀
+                domain_parts = domain.rsplit(".", 1)
+                if len(domain_parts) == 2:
+                    domain_name, tld = domain_parts
+                    if len(domain_name) > 2:
+                        masked_domain = domain_name[0] + "*" * (len(domain_name) - 2) + domain_name[-1] + "." + tld
+                    else:
+                        masked_domain = domain_name[0] + "*." + tld
+                else:
+                    masked_domain = domain[0] + "*" * (len(domain) - 1)
+                safe_config["user"] = f"{masked_local}@{masked_domain}"
         
         return {
             "success": True,
@@ -875,6 +899,10 @@ async def save_imap_config(request: ImapConfigRequest) -> dict:
         new_config = request.model_dump()
         if new_config.get("password") == "******":
             new_config["password"] = current_imap.get("password", "")
+        
+        # 如果邮箱是脱敏的值（包含*），保留原邮箱
+        if new_config.get("user") and "*" in new_config.get("user", ""):
+            new_config["user"] = current_imap.get("user", "")
         
         save_config({"imap": new_config})
         
@@ -903,6 +931,10 @@ async def test_imap_config(request: ImapConfigRequest) -> dict:
         test_config = request.model_dump()
         if test_config.get("password") == "******":
             test_config["password"] = current_imap.get("password", "")
+        
+        # 如果邮箱是脱敏的值（包含*），使用当前配置的邮箱
+        if test_config.get("user") and "*" in test_config.get("user", ""):
+            test_config["user"] = current_imap.get("user", "")
         
         result = await test_imap_connection(test_config)
         return result
