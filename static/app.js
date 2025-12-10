@@ -2753,3 +2753,167 @@ async function showApiKeyManager() {
 
   updateDialog();
 }
+
+// ==================== IMAP 邮箱配置 ====================
+
+// IMAP 服务商预设
+const IMAP_PRESETS = {
+  qq: { host: 'imap.qq.com', port: 993 },
+  outlook: { host: 'outlook.office365.com', port: 993 },
+  gmail: { host: 'imap.gmail.com', port: 993 }
+};
+
+// 打开 IMAP 配置弹窗
+function openImapConfigModal() {
+  document.getElementById('imapConfigModal').classList.add('show');
+  loadImapConfig();
+}
+
+// 关闭 IMAP 配置弹窗
+function closeImapConfigModal() {
+  document.getElementById('imapConfigModal').classList.remove('show');
+}
+
+// 加载 IMAP 配置
+async function loadImapConfig() {
+  try {
+    const resp = await fetch('/api/config/imap');
+    const data = await resp.json();
+
+    if (data.success) {
+      const imap = data.imap || {};
+      const keepAlive = data.browser_keep_alive || {};
+
+      document.getElementById('imapEnabled').checked = imap.enabled || false;
+      document.getElementById('keepAliveEnabled').checked = keepAlive.enabled || false;
+      document.getElementById('imapHost').value = imap.host || '';
+      document.getElementById('imapPort').value = imap.port || 993;
+      document.getElementById('imapUser').value = imap.user || '';
+      document.getElementById('imapPassword').value = imap.password || '';
+
+      // 自动匹配预设
+      const preset = Object.entries(IMAP_PRESETS).find(
+        ([, cfg]) => cfg.host === imap.host
+      );
+      document.getElementById('imapPreset').value = preset ? preset[0] : '';
+    }
+  } catch (e) {
+    console.error('加载 IMAP 配置失败:', e);
+  }
+}
+
+// 预设选择变化
+function onImapPresetChange() {
+  const preset = document.getElementById('imapPreset').value;
+  if (preset && IMAP_PRESETS[preset]) {
+    document.getElementById('imapHost').value = IMAP_PRESETS[preset].host;
+    document.getElementById('imapPort').value = IMAP_PRESETS[preset].port;
+  }
+}
+
+// 测试 IMAP 连接
+async function testImapConnection() {
+  const btn = document.getElementById('testImapBtn');
+  const originalText = btn.textContent;
+  btn.textContent = '测试中...';
+  btn.disabled = true;
+
+  const config = {
+    enabled: document.getElementById('imapEnabled').checked,
+    host: document.getElementById('imapHost').value.trim(),
+    port: parseInt(document.getElementById('imapPort').value) || 993,
+    user: document.getElementById('imapUser').value.trim(),
+    password: document.getElementById('imapPassword').value,
+    use_ssl: true,
+    folder: 'INBOX',
+    sender_filter: 'noreply-googlecloud@google.com',
+    code_pattern: 'class="x_verification-code">([A-Z0-9]{6})</span>',
+    max_age_seconds: 300,
+    timeout_seconds: 180,
+    poll_interval: 5,
+    auto_login: true
+  };
+
+  try {
+    const resp = await fetch('/api/config/imap/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config)
+    });
+    const result = await resp.json();
+
+    if (result.success) {
+      toast.success(result.message || 'IMAP 连接成功！');
+    } else {
+      toast.error(result.message || '连接失败');
+    }
+  } catch (e) {
+    toast.error(e.message, '测试失败');
+  } finally {
+    btn.textContent = originalText;
+    btn.disabled = false;
+  }
+}
+
+// 保存 IMAP 配置
+async function saveImapConfig() {
+  const btn = document.getElementById('saveImapBtn');
+  const originalText = btn.textContent;
+  btn.textContent = '保存中...';
+  btn.disabled = true;
+
+  // 保存 IMAP 配置
+  const imapConfig = {
+    enabled: document.getElementById('imapEnabled').checked,
+    host: document.getElementById('imapHost').value.trim(),
+    port: parseInt(document.getElementById('imapPort').value) || 993,
+    user: document.getElementById('imapUser').value.trim(),
+    password: document.getElementById('imapPassword').value,
+    use_ssl: true,
+    folder: 'INBOX',
+    sender_filter: 'noreply-googlecloud@google.com',
+    code_pattern: 'class="x_verification-code">([A-Z0-9]{6})</span>',
+    max_age_seconds: 300,
+    timeout_seconds: 180,
+    poll_interval: 5,
+    auto_login: true
+  };
+
+  // 保存保活配置
+  const keepAliveConfig = {
+    enabled: document.getElementById('keepAliveEnabled').checked,
+    interval_minutes: 60,
+    headless: true
+  };
+
+  try {
+    // 保存 IMAP 配置
+    const imapResp = await fetch('/api/config/imap', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(imapConfig)
+    });
+    const imapResult = await imapResp.json();
+
+    // 保存保活配置
+    const keepAliveResp = await fetch('/api/config/keep-alive', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(keepAliveConfig)
+    });
+    const keepAliveResult = await keepAliveResp.json();
+
+    if (imapResult.success && keepAliveResult.success) {
+      toast.success('配置已保存');
+      closeImapConfigModal();
+    } else {
+      toast.error(imapResult.error || keepAliveResult.error || '保存失败');
+    }
+  } catch (e) {
+    toast.error(e.message, '保存失败');
+  } finally {
+    btn.textContent = originalText;
+    btn.disabled = false;
+  }
+}
+

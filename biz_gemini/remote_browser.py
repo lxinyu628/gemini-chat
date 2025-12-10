@@ -249,6 +249,12 @@ class RemoteBrowserSession:
         url = self._page.url
         logger.debug(f"导航到: {url}")
 
+        # 检测是否在验证码页面
+        if self._is_verification_page(url):
+            logger.info("检测到验证码页面，准备自动获取验证码...")
+            asyncio.create_task(self._handle_verification_page())
+            return
+
         # 检测是否已登录到主页
         if self._is_main_page(url):
             # 如果已经登录成功但凭证不完整，检查新 URL 是否包含 group_id
@@ -259,6 +265,121 @@ class RemoteBrowserSession:
                     await self._handle_login_success()
             elif self.status == BrowserSessionStatus.RUNNING:
                 await self._handle_login_success()
+
+    def _is_verification_page(self, url: str) -> bool:
+        """判断是否在验证码页面"""
+        verification_indicators = [
+            "accountverification.business.gemini.google",
+            "challenge/",
+            "/signin/v2/challenge",
+        ]
+        return any(indicator in url for indicator in verification_indicators)
+
+    async def _handle_verification_page(self) -> None:
+        """处理验证码页面 - 从 IMAP 获取验证码并自动填充"""
+        try:
+            config = load_config()
+            imap_config = config.get("imap", {})
+            
+            if not imap_config.get("enabled", False):
+                self.message = "检测到验证码页面，请手动输入验证码（IMAP 未启用）"
+                await self._notify_status()
+                logger.info("IMAP 未启用，跳过自动获取验证码")
+                return
+            
+            self.message = "检测到验证码页面，正在从邮箱获取验证码..."
+            await self._notify_status()
+            
+            # 等待用户在页面上输入邮箱并点击发送验证码
+            # 验证码是在用户操作后才发送的
+            await asyncio.sleep(3)  # 给用户一些时间完成页面操作
+            
+            # 从 IMAP 获取验证码
+            from .imap_reader import get_verification_code
+            
+            async def status_callback(message: str):
+                self.message = message
+                await self._notify_status()
+            
+            code = await get_verification_code(
+                config=config,
+                status_callback=status_callback
+            )
+            
+            if code:
+                logger.info(f"从邮箱获取到验证码: {code}")
+                self.message = f"已获取验证码 {code}，正在自动填充..."
+                await self._notify_status()
+                
+                # 查找验证码输入框并填充
+                await self._fill_verification_code(code)
+            else:
+                self.message = "未能从邮箱获取验证码，请手动输入"
+                await self._notify_status()
+                logger.warning("从 IMAP 获取验证码失败")
+                
+        except Exception as e:
+            logger.error(f"处理验证码页面失败: {e}")
+            self.message = f"自动获取验证码失败: {str(e)}"
+            await self._notify_status()
+
+    async def _fill_verification_code(self, code: str) -> None:
+        """自动填充验证码"""
+        try:
+            # 常见的验证码输入框选择器
+            input_selectors = [
+                'input[type="text"]',
+                'input[name="code"]',
+                'input[name="pin"]',
+                'input[aria-label*="code"]',
+                'input[aria-label*="验证"]',
+                'input[placeholder*="code"]',
+                'input[placeholder*="验证"]',
+            ]
+            
+            for selector in input_selectors:
+                try:
+                    input_element = await self._page.query_selector(selector)
+                    if input_element:
+                        # 清空并填充验证码
+                        await input_element.click()
+                        await input_element.fill("")
+                        await input_element.type(code, delay=50)
+                        logger.info(f"验证码已填充到 {selector}")
+                        
+                        self.message = f"验证码 {code} 已填充，请点击继续或等待自动提交"
+                        await self._notify_status()
+                        
+                        # 尝试自动提交
+                        await asyncio.sleep(1)
+                        submit_selectors = [
+                            'button[type="submit"]',
+                            'button:has-text("Next")',
+                            'button:has-text("下一步")',
+                            'button:has-text("Verify")',
+                            'button:has-text("验证")',
+                        ]
+                        for submit_selector in submit_selectors:
+                            try:
+                                submit_btn = await self._page.query_selector(submit_selector)
+                                if submit_btn:
+                                    await submit_btn.click()
+                                    logger.info("已点击提交按钮")
+                                    break
+                            except Exception:
+                                continue
+                        return
+                except Exception:
+                    continue
+            
+            logger.warning("未找到验证码输入框")
+            self.message = f"验证码 {code} 已获取，但未找到输入框，请手动输入"
+            await self._notify_status()
+            
+        except Exception as e:
+            logger.error(f"填充验证码失败: {e}")
+            self.message = f"自动填充失败: {str(e)}，请手动输入验证码: {code}"
+            await self._notify_status()
 
     def _is_main_page(self, url: str) -> bool:
         """判断是否已到达主页面（登录成功）"""

@@ -63,5 +63,29 @@
     "password": "",
     "db": 0,
     "key_prefix": "gemini_chat:"
+  },
+  "imap": {
+    "_comment": "IMAP 邮箱配置 - 用于自动读取 Google 验证码",
+    "_comment_enabled": "是否启用 IMAP 验证码读取，启用后可自动从邮箱获取验证码",
+    "_comment_host": "IMAP 服务器地址（QQ邮箱: imap.qq.com, Outlook: outlook.office365.com, Gmail: imap.gmail.com）",
+    "_comment_port": "IMAP 服务器端口，通常为 993 (SSL)",
+    "_comment_user": "邮箱账号",
+    "_comment_password": "邮箱密码或授权码（QQ邮箱需生成授权码，Gmail需应用专用密码）",
+    "_comment_sender_filter": "发件人过滤，Google Cloud 验证码发件人",
+    "_comment_timeout": "等待验证码超时时间（秒），默认 180 秒（3 分钟）",
+    "_comment_auto_login": "配合 browser_keep_alive 使用：session 过期时自动启动浏览器登录",
+    "enabled": false,
+    "host": "",
+    "port": 993,
+    "user": "",
+    "password": "",
+    "use_ssl": true,
+    "folder": "INBOX",
+    "sender_filter": "noreply-googlecloud@google.com",
+    "code_pattern": "class=\"x_verification-code\">([A-Z0-9]{6})</span>",
+    "max_age_seconds": 300,
+    "timeout_seconds": 180,
+    "poll_interval": 5,
+    "auto_login": true
   }
 }

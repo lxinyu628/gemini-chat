@@ -810,6 +810,124 @@ async def logout() -> dict:
         }
 
 
+# ==================== IMAP 配置端点 ====================
+
+class ImapConfigRequest(BaseModel):
+    enabled: bool = False
+    host: str = ""
+    port: int = 993
+    user: str = ""
+    password: str = ""
+    use_ssl: bool = True
+    folder: str = "INBOX"
+    sender_filter: str = "noreply-googlecloud@google.com"
+    code_pattern: str = 'class="x_verification-code">([A-Z0-9]{6})</span>'
+    max_age_seconds: int = 300
+    timeout_seconds: int = 180
+    poll_interval: int = 5
+    auto_login: bool = True
+
+
+class KeepAliveConfigRequest(BaseModel):
+    enabled: bool = False
+    interval_minutes: int = 60
+    headless: bool = True
+
+
+@app.get("/api/config/imap")
+async def get_imap_config() -> dict:
+    """获取 IMAP 配置（密码脱敏）"""
+    try:
+        config = load_config()
+        imap_config = config.get("imap", {})
+        keep_alive_config = config.get("browser_keep_alive", {})
+        
+        # 脱敏密码
+        safe_config = {**imap_config}
+        if safe_config.get("password"):
+            safe_config["password"] = "******"
+        
+        return {
+            "success": True,
+            "imap": safe_config,
+            "browser_keep_alive": keep_alive_config,
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+        }
+
+
+@app.post("/api/config/imap")
+async def save_imap_config(request: ImapConfigRequest) -> dict:
+    """保存 IMAP 配置"""
+    try:
+        config = load_config()
+        current_imap = config.get("imap", {})
+        
+        # 如果密码是脱敏的占位符，保留原密码
+        new_config = request.model_dump()
+        if new_config.get("password") == "******":
+            new_config["password"] = current_imap.get("password", "")
+        
+        save_config({"imap": new_config})
+        
+        return {
+            "success": True,
+            "message": "IMAP 配置已保存",
+        }
+    except Exception as e:
+        logger.error(f"保存 IMAP 配置失败: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+        }
+
+
+@app.post("/api/config/imap/test")
+async def test_imap_config(request: ImapConfigRequest) -> dict:
+    """测试 IMAP 连接"""
+    from biz_gemini.imap_reader import test_imap_connection
+    
+    try:
+        config = load_config()
+        current_imap = config.get("imap", {})
+        
+        # 如果密码是脱敏的占位符，使用当前配置的密码
+        test_config = request.model_dump()
+        if test_config.get("password") == "******":
+            test_config["password"] = current_imap.get("password", "")
+        
+        result = await test_imap_connection(test_config)
+        return result
+        
+    except Exception as e:
+        logger.error(f"测试 IMAP 连接失败: {e}")
+        return {
+            "success": False,
+            "message": f"测试失败: {str(e)}",
+        }
+
+
+@app.post("/api/config/keep-alive")
+async def save_keep_alive_config(request: KeepAliveConfigRequest) -> dict:
+    """保存保活配置"""
+    try:
+        save_config({"browser_keep_alive": request.model_dump()})
+        
+        return {
+            "success": True,
+            "message": "保活配置已保存，重启服务后生效",
+        }
+    except Exception as e:
+        logger.error(f"保存保活配置失败: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+        }
+
+
 # ==================== API Key 管理端点 ====================
 
 class PasswordRequest(BaseModel):

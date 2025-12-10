@@ -77,6 +77,22 @@ DEFAULT_CONFIG = {
         "db": 0,  # Redis 数据库编号
         "key_prefix": "gemini_chat:",  # Key 前缀
     },
+    # IMAP 配置（用于自动读取验证码）
+    "imap": {
+        "enabled": False,  # 是否启用 IMAP 验证码读取
+        "host": "",  # IMAP 服务器地址
+        "port": 993,  # IMAP 端口
+        "user": "",  # 邮箱账号
+        "password": "",  # 邮箱密码或授权码
+        "use_ssl": True,  # 是否使用 SSL
+        "folder": "INBOX",  # 邮箱文件夹
+        "sender_filter": "noreply-googlecloud@google.com",  # 发件人过滤
+        "code_pattern": r'class="x_verification-code">([A-Z0-9]{6})</span>',  # 验证码正则
+        "max_age_seconds": 300,  # 只查找最近 5 分钟的邮件
+        "timeout_seconds": 180,  # 等待验证码超时（3 分钟）
+        "poll_interval": 5,  # 轮询间隔（秒）
+        "auto_login": True,  # 配合保活使用：过期时自动登录
+    },
 }
 
 
@@ -246,6 +262,18 @@ def save_config(update: dict) -> dict:
             cfg["security"] = DEFAULT_CONFIG["security"].copy()
         cfg["security"].update(update["security"])
     
+    # 处理 imap 配置
+    if "imap" in update:
+        if "imap" not in cfg:
+            cfg["imap"] = DEFAULT_CONFIG["imap"].copy()
+        cfg["imap"].update(update["imap"])
+    
+    # 处理 browser_keep_alive 配置
+    if "browser_keep_alive" in update:
+        if "browser_keep_alive" not in cfg:
+            cfg["browser_keep_alive"] = DEFAULT_CONFIG["browser_keep_alive"].copy()
+        cfg["browser_keep_alive"].update(update["browser_keep_alive"])
+    
     # 保存到文件（只保存结构化数据）
     save_data = {
         "server": cfg.get("server", DEFAULT_CONFIG["server"]),
@@ -259,6 +287,7 @@ def save_config(update: dict) -> dict:
         "remote_browser": cfg.get("remote_browser", DEFAULT_CONFIG["remote_browser"]),
         "security": cfg.get("security", DEFAULT_CONFIG["security"]),
         "redis": cfg.get("redis", DEFAULT_CONFIG["redis"]),
+        "imap": cfg.get("imap", DEFAULT_CONFIG["imap"]),
     }
     
     NEW_CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
