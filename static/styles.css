@@ -2036,3 +2036,130 @@ body {
   background-color: #d32f2f;
   border-color: #d32f2f;
 }
+
+/* ==================== IMAP 配置样式 ==================== */
+
+/* IMAP 标签按钮（在 tabs 行最右侧） */
+.tab-btn-imap {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid var(--border-color);
+}
+
+.tab-btn-imap:hover {
+  color: var(--accent-color);
+  border-color: var(--accent-color);
+  background: transparent;
+}
+
+.tab-btn-imap svg,
+.tab-btn-imap i {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+/* IMAP 提示样式 */
+.imap-hint {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  background-color: var(--bg-secondary);
+  border-left: 3px solid #0842a0;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.imap-hint svg,
+.imap-hint i {
+  width: 18px;
+  height: 18px;
+  color: #0842a0;
+  flex-shrink: 0;
+}
+
+/* Toggle Switch 开关样式 */
+.toggle-switch {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.toggle-switch input[type="checkbox"] {
+  width: 40px;
+  height: 22px;
+  appearance: none;
+  -webkit-appearance: none;
+  background-color: var(--border-color);
+  border-radius: 11px;
+  position: relative;
+  cursor: pointer;
+  transition: background-color 0.2s;
+  flex-shrink: 0;
+}
+
+.toggle-switch input[type="checkbox"]::before {
+  content: "";
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  top: 2px;
+  left: 2px;
+  background-color: white;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  transition: transform 0.2s;
+}
+
+.toggle-switch input[type="checkbox"]:checked {
+  background-color: var(--accent-color);
+}
+
+.toggle-switch input[type="checkbox"]:checked::before {
+  transform: translateX(18px);
+}
+
+.toggle-text {
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+/* 表单操作按钮区域 */
+.form-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-color);
+}
+
+.form-actions .btn {
+  flex: 1;
+}
+
+/* 下拉选择框样式 */
+.form-group select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 14px;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+
+.form-group select:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}

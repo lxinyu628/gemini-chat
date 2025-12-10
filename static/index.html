@@ -168,6 +168,10 @@
           <div class="login-tabs">
             <button class="tab-btn active" data-tab="browser">远程浏览器</button>
             <button class="tab-btn" data-tab="manual">手动输入</button>
+            <button class="tab-btn tab-btn-imap" onclick="openImapConfigModal()">
+              <i data-lucide="mail" style="width: 14px; height: 14px"></i>
+              <span>IMAP 邮箱设置</span>
+            </button>
           </div>
 
           <!-- 远程浏览器标签页 -->
@@ -216,11 +220,6 @@
             </details>
             <button class="btn btn-primary" id="saveManualBtn">保存配置</button>
           </div>
-
-          <!-- IMAP 设置入口 -->
-          <div class="imap-settings-entry">
-            <button class="btn btn-secondary" onclick="openImapConfigModal()"><i data-lucide="mail"></i> IMAP 邮箱设置</button>
-          </div>
         </div>
       </div>
     </div>
@@ -233,19 +232,24 @@
           <button class="modal-close" onclick="closeImapConfigModal()">&times;</button>
         </div>
         <div class="modal-body">
-          <p class="hint">配置 IMAP 后，系统可自动从邮箱读取 Google 验证码</p>
+          <div class="imap-hint">
+            <i data-lucide="badge-info"></i>
+            <span>配置 IMAP 后，系统可自动从邮箱读取 Google 验证码</span>
+          </div>
 
           <!-- 开关选项 -->
-          <div class="form-group toggle-group">
-            <label class="toggle-label">
+          <div class="form-group">
+            <label class="toggle-switch">
               <input type="checkbox" id="imapEnabled" />
-              <span>启用 IMAP 验证码读取</span>
+              <span class="toggle-slider"></span>
+              <span class="toggle-text">启用 IMAP 验证码读取</span>
             </label>
           </div>
-          <div class="form-group toggle-group">
-            <label class="toggle-label">
+          <div class="form-group">
+            <label class="toggle-switch">
               <input type="checkbox" id="keepAliveEnabled" />
-              <span>启用保活（自动刷新登录）</span>
+              <span class="toggle-slider"></span>
+              <span class="toggle-text">启用保活（自动刷新登录）</span>
             </label>
           </div>
 
