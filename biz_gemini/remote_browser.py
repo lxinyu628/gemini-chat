@@ -661,7 +661,6 @@ class RemoteBrowserSession:
                     "config": self._login_config,
                 })
 
-                # 尝试获取并保存 username（供自动登录使用）
                 try:
                     from .auth import check_session_status
                     session_status = check_session_status(self._login_config)
@@ -669,6 +668,8 @@ class RemoteBrowserSession:
                     if username:
                         self._login_config["username"] = username
                         logger.info(f"获取到用户邮箱: {username}")
+                    elif session_status.get("warning") and session_status.get("valid"):
+                        logger.info("list-sessions 返回 warning 但 JWT 可用，跳过 username 获取")
                 except Exception as e:
                     logger.warning(f"获取用户邮箱失败: {e}")
             else:

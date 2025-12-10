@@ -491,21 +491,15 @@ async def get_status() -> dict:
         elif session_status.get("expired", False):
             mark_cookie_expired("session check expired")
 
-        # 处理 warning 状态（如 Cookies 无效/缺少 __Host-C_OSES，但 JWT 路径可用）
-        if session_status.get("warning", False):
-            # warning=True 时，如果 valid=True 说明 JWT 路径可用，可以继续使用
-            is_valid = session_status.get("valid", False)
+        if session_status.get("warning", False) and session_status.get("valid", False):
+            username = session_status.get("username") or config.get("username")
             return {
-                "logged_in": is_valid,  # 根据 valid 判断是否可用
+                "logged_in": True,
                 "warning": True,
-                "expired": False,  # warning 状态不认为过期
-                "message": "登录异常，可能 Cookie 校验失败但可继续使用" if is_valid else session_status.get("error", "登录状态异常"),
+                "expired": False,
+                "username": username,
+                "message": f"已登录: {username}" if username else "已登录",
                 "account_chooser_url": account_chooser_url,
-                "debug": {
-                    "error": session_status.get("error"),
-                    "raw_response": session_status.get("raw_response"),
-                    "cookie_debug": session_status.get("cookie_debug"),
-                },
             }
 
         if session_status.get("expired", False):

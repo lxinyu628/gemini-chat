@@ -586,17 +586,8 @@ async function checkStatus () {
     if (data.expired || data.logged_in === false) {
       elements.statusIndicator.classList.add('error');
       statusText.innerHTML = '登录已过期，<a href="javascript:void(0)" class="login-link" onclick="openLoginModal()">点此登录</a>';
-    } else if (data.warning) {
-      // warning 状态：可能 Cookie 校验失败但可继续使用
-      elements.statusIndicator.classList.add('warning');
-      statusText.textContent = '登录异常，可能 Cookie 校验失败但可继续使用';
-      // 不弹模态框，只在控制台输出调试信息
-      if (data.debug) {
-        console.warn('登录状态警告:', data.message, data.debug);
-      }
-    } else if (data.logged_in) {
+    } else if (data.logged_in || data.warning) {
       elements.statusIndicator.classList.add('online');
-      // 显示用户名或简单的"已登录"状态
       if (data.username) {
         statusText.textContent = `已登录: ${data.username}`;
       } else {
