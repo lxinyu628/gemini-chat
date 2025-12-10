@@ -1888,7 +1888,7 @@ body {
   display: block;
   font-size: 12px;
   color: var(--text-secondary);
-  margin-top: 4px;
+  margin-top: 6px;
 }
 
 .form-group .hint b {
@@ -2064,7 +2064,7 @@ body {
 }
 
 /* IMAP 提示样式 */
-.imap-hint {
+.modal-body .imap-hint {
   display: flex;
   align-items: center;
   gap: 10px;
