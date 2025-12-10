@@ -61,6 +61,18 @@ class ConfigFileEventHandler(FileSystemEventHandler):
                             from biz_gemini.auth import on_cookie_refreshed
                             on_cookie_refreshed()
                             print("[+] 检测到 session 变更，已清除 JWT 缓存和过期标记")
+
+                            # 同时重置保活服务的内部状态
+                            try:
+                                from biz_gemini.keep_alive import get_keep_alive_service
+                                keep_alive = get_keep_alive_service()
+                                keep_alive._session_valid = True
+                                keep_alive._cookie_expired = False
+                                keep_alive._last_error = None
+                                keep_alive._last_check = None  # 强制下次检查时重新验证
+                                print("[+] 已重置保活服务状态")
+                            except Exception as e:
+                                print(f"[!] 重置保活服务状态失败: {e}")
                         except Exception as e:
                             print(f"[!] 清除缓存失败: {e}")
 
