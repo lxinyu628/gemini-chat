@@ -284,7 +284,6 @@ class IMAPReader:
             else:
                 logger.debug("[IMAP] 主正则未匹配")
 
-            # 增强：参考 auto_login_with_email.py 的行级匹配逻辑
             # 先按行精确匹配提示语，避免误匹配
             lines = body.splitlines()
             for line in lines:
@@ -321,7 +320,6 @@ class IMAPReader:
                             logger.info(f"[IMAP] ✓ 行级匹配到验证码: {code} (来源行: {line.strip()[:80]}...)")
                             return code
 
-            # 备用：全局模式匹配（参考 auto_login_with_email.py）
             global_patterns = [
                 # 中文模式
                 (r'一次性验证码为[：:]\s*([A-Z0-9]{6})', '中文-一次性验证码为'),
