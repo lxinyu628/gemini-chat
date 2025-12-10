@@ -1090,24 +1090,46 @@ def _is_main_page(url: str) -> bool:
 
 async def _extract_and_save_cookies(context, current_url: str) -> dict:
     """提取并保存 Cookie
-    
+
     Args:
         context: Playwright 上下文对象
         current_url: 当前页面 URL
-        
+
     Returns:
         {"success": bool, "message": str, "needs_manual_login": bool}
     """
     try:
+        # 提取 csesidx（在访问 getoxsrf 之前需要）
+        csesidx = None
+        if "csesidx=" in current_url:
+            csesidx = current_url.split("csesidx=", 1)[1].split("&", 1)[0]
+
+        # 关键步骤：在浏览器中访问 getoxsrf 端点，触发 Cookie 刷新
+        # 这样可以确保 Cookie 被 Google 服务器正确刷新，避免后续 httpx 请求时返回 302
+        if csesidx:
+            try:
+                logger.info("[自动登录] 在浏览器中访问 getoxsrf 端点以刷新 Cookie...")
+                page = await context.new_page()
+                try:
+                    getoxsrf_url = f"https://business.gemini.google/auth/getoxsrf?csesidx={csesidx}"
+                    await page.goto(getoxsrf_url, timeout=30000, wait_until="domcontentloaded")
+                    await asyncio.sleep(1)  # 等待 Cookie 刷新完成
+                    logger.info("[自动登录] getoxsrf 访问完成")
+                finally:
+                    await page.close()
+            except Exception as e:
+                logger.warning(f"[自动登录] 访问 getoxsrf 失败（可忽略）: {e}")
+
+        # 重新获取 Cookie（可能已被 getoxsrf 更新）
         browser_cookies = await context.cookies()
         new_secure_c_ses = None
         new_host_c_oses = None
         new_nid = None
-        
+
         # 收集所有相关 Cookie
         cookie_map = {}
         target_domains = ["auth.business.gemini.google", "business.gemini.google", ".business.gemini.google"]
-        
+
         for cookie in browser_cookies:
             cookie_domain = cookie.get("domain", "")
             is_target_domain = any(
@@ -1116,7 +1138,7 @@ async def _extract_and_save_cookies(context, current_url: str) -> dict:
             )
             if is_target_domain:
                 cookie_map[cookie['name']] = cookie['value']
-            
+
             if cookie["name"] == "__Secure-C_SES":
                 new_secure_c_ses = cookie["value"]
             elif cookie["name"] == "__Host-C_OSES":
@@ -1131,13 +1153,8 @@ async def _extract_and_save_cookies(context, current_url: str) -> dict:
                 "needs_manual_login": True,
             }
 
-        # 提取 csesidx 和 group_id
-        csesidx = None
+        # 提取 group_id
         group_id = None
-        
-        if "csesidx=" in current_url:
-            csesidx = current_url.split("csesidx=", 1)[1].split("&", 1)[0]
-        
         if "/cid/" in current_url:
             after = current_url.split("/cid/", 1)[1]
             for sep in ("/", "?", "#"):
@@ -1169,18 +1186,8 @@ async def _extract_and_save_cookies(context, current_url: str) -> dict:
         mark_cookie_valid()
 
         # 尝试获取 username 并保存（供自动登录使用）
-        try:
-            from .auth import check_session_status
-            from .config import load_config as reload_cfg
-            updated_config = reload_cfg()
-            session_status = check_session_status(updated_config)
-            username = session_status.get("username")
-            if username:
-                save_config({"username": username})
-                logger.info(f"[自动登录] ✓ 已保存用户邮箱: {username}")
-        except Exception as e:
-            logger.warning(f"[自动登录] 获取用户邮箱失败: {e}")
-
+        # 注意：这里不再调用 check_session_status，因为它可能触发 getoxsrf 请求
+        # 而我们已经在浏览器中完成了 Cookie 刷新
         logger.info(f"[自动登录] ✓ Cookie 刷新成功，csesidx={csesidx}, group_id={group_id}")
         return {
             "success": True,
