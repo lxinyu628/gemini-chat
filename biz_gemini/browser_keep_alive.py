@@ -64,6 +64,7 @@ class BrowserKeepAliveService:
         self._playwright = None
         self._browser = None
         self._context = None
+        self._use_persistent_context = False
 
     def add_callback(self, callback: Callable) -> None:
         """添加状态变更回调"""
@@ -105,19 +106,28 @@ class BrowserKeepAliveService:
 
     async def _cleanup_browser(self) -> None:
         """清理浏览器资源"""
-        if self._context:
-            try:
-                await self._context.close()
-            except Exception:
-                pass
-            self._context = None
+        if hasattr(self, '_use_persistent_context') and self._use_persistent_context:
+            if self._context:
+                try:
+                    await self._context.close()
+                except Exception:
+                    pass
+                self._context = None
+                self._browser = None
+        else:
+            if self._context:
+                try:
+                    await self._context.close()
+                except Exception:
+                    pass
+                self._context = None
 
-        if self._browser:
-            try:
-                await self._browser.close()
-            except Exception:
-                pass
-            self._browser = None
+            if self._browser:
+                try:
+                    await self._browser.close()
+                except Exception:
+                    pass
+                self._browser = None
 
         if self._playwright:
             try:
@@ -127,37 +137,81 @@ class BrowserKeepAliveService:
             self._playwright = None
 
     async def _init_browser(self) -> bool:
-        """初始化浏览器（带反检测配置）"""
+        """初始化浏览器（带反检测配置）
+
+        优先使用持久化的浏览器配置文件（cookie_profile_dir），
+        这样可以复用远程登录时的完整会话状态，避免 Cookie 不匹配问题。
+        """
         try:
             from playwright.async_api import async_playwright
 
             config = load_config()
             proxy = get_proxy(config)
 
-            # Playwright 不支持 socks5h://，转换为 socks5://
             playwright_proxy = proxy
             if proxy and proxy.startswith("socks5h://"):
                 playwright_proxy = proxy.replace("socks5h://", "socks5://", 1)
 
             self._playwright = await async_playwright().start()
 
-            # 反检测：使用更真实的浏览器启动参数
             launch_args = [
-                "--disable-blink-features=AutomationControlled",  # 禁用自动化控制特征
-                "--disable-infobars",  # 禁用信息栏
-                "--disable-dev-shm-usage",  # 禁用 /dev/shm 使用
-                "--no-first-run",  # 跳过首次运行
-                "--no-default-browser-check",  # 跳过默认浏览器检查
-                "--disable-background-timer-throttling",  # 禁用后台定时器节流
-                "--disable-backgrounding-occluded-windows",  # 禁用遮挡窗口后台化
-                "--disable-renderer-backgrounding",  # 禁用渲染器后台化
+                "--disable-blink-features=AutomationControlled",
+                "--disable-infobars",
+                "--disable-dev-shm-usage",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-background-timer-throttling",
+                "--disable-backgrounding-occluded-windows",
+                "--disable-renderer-backgrounding",
             ]
 
-            # 尝试使用本机 Chrome，如果不存在则使用 Playwright 自带的 Chromium
+            cookie_profile_dir = config.get("cookie_profile_dir")
+            if cookie_profile_dir:
+                import os
+                if os.path.exists(cookie_profile_dir):
+                    logger.info(f"使用持久化浏览器配置文件: {cookie_profile_dir}")
+                    try:
+                        self._browser = await self._playwright.chromium.launch_persistent_context(
+                            cookie_profile_dir,
+                            headless=self.headless,
+                            channel="chrome",
+                            args=launch_args,
+                            viewport={"width": 1920, "height": 1080},
+                            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                            locale="zh-CN",
+                            timezone_id="Asia/Shanghai",
+                            ignore_https_errors=True,
+                            proxy={"server": playwright_proxy} if playwright_proxy else None,
+                        )
+                        self._context = self._browser
+                        self._use_persistent_context = True
+
+                        await self._context.add_init_script("""
+                            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                            Object.defineProperty(navigator, 'plugins', {
+                                get: () => [
+                                    { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer' },
+                                    { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai' },
+                                    { name: 'Native Client', filename: 'internal-nacl-plugin' }
+                                ]
+                            });
+                            Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en'] });
+                            window.chrome = { runtime: {}, loadTimes: function() {}, csi: function() {}, app: {} };
+                        """)
+
+                        logger.info(f"浏览器已初始化 (持久化模式, 代理: {playwright_proxy}, 无头: {self.headless})")
+                        return True
+                    except Exception as e:
+                        logger.warning(f"持久化模式启动失败 ({e})，回退到普通模式")
+                else:
+                    logger.warning(f"cookie_profile_dir 不存在: {cookie_profile_dir}")
+
+            self._use_persistent_context = False
+
             try:
                 self._browser = await self._playwright.chromium.launch(
                     headless=self.headless,
-                    channel="chrome",  # 优先使用本机 Chrome
+                    channel="chrome",
                     args=launch_args,
                 )
             except Exception as e:
@@ -167,23 +221,14 @@ class BrowserKeepAliveService:
                     args=launch_args,
                 )
 
-            # 反检测：使用更真实的浏览器上下文配置
             context_kwargs = {
-                # 模拟真实的视口大小
                 "viewport": {"width": 1920, "height": 1080},
-                # 模拟真实的 User-Agent
                 "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                # 设置语言
                 "locale": "zh-CN",
-                # 设置时区
                 "timezone_id": "Asia/Shanghai",
-                # 模拟真实的屏幕参数
                 "screen": {"width": 1920, "height": 1080},
-                # 设置设备缩放因子
                 "device_scale_factor": 1,
-                # 启用 JavaScript
                 "java_script_enabled": True,
-                # 忽略 HTTPS 错误
                 "ignore_https_errors": True,
             }
 
@@ -230,10 +275,9 @@ class BrowserKeepAliveService:
                 );
             """)
 
-            # 设置现有 Cookie
             await self._set_cookies_from_config(config)
 
-            logger.info(f"浏览器已初始化 (代理: {playwright_proxy}, 无头: {self.headless}, 反检测: 已启用)")
+            logger.info(f"浏览器已初始化 (普通模式, 代理: {playwright_proxy}, 无头: {self.headless})")
             return True
 
         except Exception as e:
@@ -620,16 +664,21 @@ class BrowserKeepAliveService:
         for cookie in cookies:
             name = cookie.get("name")
             value = cookie.get("value")
-            
-            # 收集 cookie_raw
             cookie_domain = cookie.get("domain", "")
-            if any(cookie_domain == d or cookie_domain.endswith(d) for d in target_domains):
+
+            is_gemini_domain = any(
+                cookie_domain == d or cookie_domain.endswith(d) or d.endswith(cookie_domain)
+                for d in target_domains
+            )
+            if is_gemini_domain or name.startswith("__Secure-") or name.startswith("__Host-"):
                 cookie_map[name] = value
 
             if name == "__Secure-C_SES":
                 secure_c_ses = value
+                logger.debug(f"[Cookie提取] __Secure-C_SES: domain={cookie_domain}, value={value[:30]}...")
             elif name == "__Host-C_OSES":
                 host_c_oses = value
+                logger.debug(f"[Cookie提取] __Host-C_OSES: domain={cookie_domain}, value={value[:30]}...")
             elif name == "NID":
                 nid = value
 

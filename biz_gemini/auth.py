@@ -211,41 +211,48 @@ def check_session_status(config: Optional[dict] = None) -> dict:
             except Exception:
                 raw_response = {"raw_text": resp.text[:500]}
 
-            # 检查是否是 INVALID_COOKIES 状态
             status = raw_response.get("status") if isinstance(raw_response, dict) else None
             host_c_oses = config.get("host_c_oses")
             if status == "INVALID_COOKIES":
-                # Cookies 无效/缺少 __Host-C_OSES
-                # 新增回退：尝试通过 JWT 路径（BizGeminiClient.list_sessions）判断
                 try:
-                    from .biz_client import BizGeminiClient
-                    jwt_manager = JWTManager(config=config)
-                    biz_client = BizGeminiClient(config, jwt_manager)
-                    # 尝试调用 list_sessions（JWT 路径）
-                    biz_client.list_sessions(page_size=1)
-                    # 如果成功，说明 JWT 路径可用，标记 valid=True, warning=True
-                    missing_cookie_hint = "缺少 __Host-C_OSES" if not host_c_oses else "Cookies 无效"
+                    _get_jwt_via_api(config)
+                    error_msg = raw_response.get("message", "Cookies 无效")
                     return {
-                        "valid": True,  # JWT 路径可用
+                        "valid": True,
                         "expired": False,
-                        "warning": True,  # 但 list-sessions 失败，有警告
-                        "username": None,
-                        "error": f"list-sessions 失败但 JWT 路径可用 ({missing_cookie_hint})",
-                        "raw_response": raw_response,
-                        "cookie_debug": cookie_debug,
-                    }
-                except Exception as jwt_err:
-                    # JWT 路径也失败，返回 warning
-                    missing_cookie_hint = "缺少 __Host-C_OSES" if not host_c_oses else "Cookies 无效"
-                    return {
-                        "valid": False,
-                        "expired": False,  # 不强行认为过期
                         "warning": True,
                         "username": None,
-                        "error": f"Cookies 无效或缺失 ({missing_cookie_hint}), JWT 路径也失败: {jwt_err}",
+                        "error": f"list-sessions 失败但 getoxsrf 可用 ({error_msg})",
                         "raw_response": raw_response,
                         "cookie_debug": cookie_debug,
                     }
+                except Exception as getoxsrf_err:
+                    try:
+                        from .biz_client import BizGeminiClient
+                        jwt_manager = JWTManager(config=config)
+                        biz_client = BizGeminiClient(config, jwt_manager)
+                        biz_client.list_sessions(page_size=1)
+                        missing_cookie_hint = "缺少 __Host-C_OSES" if not host_c_oses else "Cookies 无效"
+                        return {
+                            "valid": True,
+                            "expired": False,
+                            "warning": True,
+                            "username": None,
+                            "error": f"list-sessions 失败但 JWT 路径可用 ({missing_cookie_hint})",
+                            "raw_response": raw_response,
+                            "cookie_debug": cookie_debug,
+                        }
+                    except Exception as jwt_err:
+                        missing_cookie_hint = "缺少 __Host-C_OSES" if not host_c_oses else "Cookies 无效"
+                        return {
+                            "valid": False,
+                            "expired": False,
+                            "warning": True,
+                            "username": None,
+                            "error": f"Cookies 无效或缺失 ({missing_cookie_hint}), getoxsrf 失败: {getoxsrf_err}, JWT 路径也失败: {jwt_err}",
+                            "raw_response": raw_response,
+                            "cookie_debug": cookie_debug,
+                        }
 
             # 尝试通过 getoxsrf 验证 session 是否有效
             try:
