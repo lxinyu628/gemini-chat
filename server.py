@@ -488,8 +488,17 @@ async def get_status() -> dict:
                     save_config({"username": username})
                 except Exception:
                     pass
-        elif session_status.get("expired", False):
-            mark_cookie_expired("session check expired")
+        else:
+            # 会话无效或过期，强制更新保活服务缓存状态
+            try:
+                keep_alive._session_valid = False
+                keep_alive._last_check = datetime.now()
+                keep_alive._last_error = session_status.get("error")
+                if session_status.get("expired", False):
+                    keep_alive._cookie_expired = True
+                    mark_cookie_expired(session_status.get("error", "session check expired"))
+            except Exception:
+                pass
 
         if session_status.get("warning", False) and session_status.get("valid", False):
             username = session_status.get("username") or config.get("username")
