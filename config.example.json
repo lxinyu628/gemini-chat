@@ -81,7 +81,7 @@
     "password": "",
     "use_ssl": true,
     "folder": "INBOX",
-    "sender_filter": "noreply-googlecloud@google.com",
+    "sender_filter": "noreply-googlecloud",
     "code_pattern": "class=\"x_verification-code\">([A-Z0-9]{6})</span>",
     "max_age_seconds": 300,
     "timeout_seconds": 180,
