@@ -524,10 +524,13 @@ async def get_status() -> dict:
             }
 
         if session_status.get("error"):
+            # 关键修复：如果 valid=False，即使有 error 也应该返回 logged_in=False
+            is_valid = session_status.get("valid", False)
             return {
-                "logged_in": True,
+                "logged_in": is_valid,
                 "warning": True,
-                "message": f"检查状态失败: {session_status['error']}",
+                "expired": not is_valid,  # valid=False 意味着实际上已过期/无效
+                "message": f"检查状态失败: {session_status['error']}" if is_valid else "登录已失效，请重新登录",
                 "account_chooser_url": account_chooser_url,
                 "debug": {
                     "error": session_status.get("error"),
