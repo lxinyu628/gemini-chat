@@ -459,14 +459,27 @@ def mark_cookie_valid() -> None:
     _sync_cookie_state_to_redis(expired=False, reason="")
 
 
-def is_cookie_expired() -> bool:
+def is_cookie_expired(verify_if_expired: bool = True) -> bool:
     """检查 Cookie 是否已标记为过期
     
     优先从 Redis 读取（多 Worker 一致性），回退到本地内存状态。
+    当 verify_if_expired=True 且缓存显示过期时，会尝试通过 getoxsrf 实时验证。
     """
     # 优先从 Redis 读取共享状态
     redis_state = _load_cookie_state_from_redis()
     if redis_state is not None:
+        if redis_state and verify_if_expired:
+            # 缓存显示过期，尝试实时验证 getoxsrf
+            try:
+                from .auth import _get_jwt_via_api
+                config = load_config()
+                _get_jwt_via_api(config)  # 如果成功，说明实际有效
+                mark_cookie_valid()  # 更新缓存
+                logger.info("Redis cookie_state 显示过期但 getoxsrf 验证成功，已更新状态")
+                return False
+            except Exception as e:
+                logger.debug(f"getoxsrf 验证失败，确认过期: {e}")
+                pass  # 验证失败，确认过期
         return redis_state
     # 回退到本地内存状态
     with _account_state_lock:
@@ -572,5 +585,13 @@ def clear_redis_session_cache() -> None:
             # 同时清除 JWT 缓存（确保一致性）
             redis_mgr.delete("jwt_token")
             logger.debug("已清除 Redis JWT 缓存")
+            
+            # 清除 cookie_state 缓存
+            redis_mgr.delete("cookie_state")
+            logger.debug("已清除 Redis cookie_state 缓存")
+            
+            # 清除 keep_alive_state 缓存
+            redis_mgr.delete("keep_alive_state")
+            logger.debug("已清除 Redis keep_alive_state 缓存")
     except Exception as e:
         logger.debug(f"清除 Redis session 缓存失败（可忽略）: {e}")
