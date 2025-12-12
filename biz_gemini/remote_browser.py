@@ -160,7 +160,7 @@ class RemoteBrowserSession:
                 "args": launch_args,
                 "viewport": {"width": self.viewport_width, "height": self.viewport_height},
                 "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-                "locale": "zh-CN",
+                "locale": "en-US",
                 "timezone_id": "Asia/Shanghai",
                 "ignore_https_errors": True,
             }
@@ -213,7 +213,7 @@ class RemoteBrowserSession:
                 context_options = {
                     "viewport": {"width": self.viewport_width, "height": self.viewport_height},
                     "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-                    "locale": "zh-CN",
+                    "locale": "en-US",
                     "timezone_id": "Asia/Shanghai",
                     "ignore_https_errors": True,
                 }
