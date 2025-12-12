@@ -625,6 +625,25 @@ class BizGeminiClient:
             file_ids: 要包含在请求中的文件 ID 列表
         """
         session = session_name or self.session_name
+        
+        # 检查速率限制（仅当 Redis 启用时生效）
+        if self._redis_manager:
+            rate_limit_config = self.config.get("redis", {}).get("rate_limit", {})
+            if rate_limit_config.get("enabled", True):
+                max_requests = rate_limit_config.get("max_requests", 10)
+                window_seconds = rate_limit_config.get("window_seconds", 60)
+                
+                allowed, wait_time = self._redis_manager.acquire_rate_limit(
+                    "gemini_api_request",
+                    max_requests=max_requests,
+                    window_seconds=window_seconds
+                )
+                
+                if not allowed:
+                    raise RuntimeError(
+                        f"速率限制：当前请求过于频繁，请在 {wait_time:.1f} 秒后重试。"
+                        f"（限制：{max_requests} 次/{window_seconds} 秒）"
+                    )
 
         for attempt in range(3):
             jwt = self.jwt_manager.get_jwt()

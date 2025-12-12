@@ -504,7 +504,12 @@ GET /v1/models
     "port": 6379, // Redis 端口
     "password": "", // Redis 密码
     "db": 0, // Redis 数据库编号
-    "key_prefix": "gemini_chat:" // Redis key 前缀
+    "key_prefix": "gemini_chat:", // Redis key 前缀
+    "rate_limit": {
+      "enabled": true, // 是否启用速率限制（防止 429 错误）
+      "max_requests": 10, // 时间窗口内最大请求数
+      "window_seconds": 60 // 时间窗口大小（秒）
+    }
   },
   "imap": {
     "enabled": false, // 是否启用 IMAP 验证码自动获取
@@ -685,10 +690,25 @@ docker run --ipc=host ...
   "redis": {
     "enabled": true,
     "host": "127.0.0.1",
-    "port": 6379
+    "port": 6379,
+    "rate_limit": {
+      "enabled": true,
+      "max_requests": 10,
+      "window_seconds": 60
+    }
   }
 }
 ```
+
+**速率限制说明**：当启用 Redis 时，系统会自动在多个 Worker 之间协调 API 请求速率，防止并发请求过多触发 Google API 的 429 错误（RESOURCE_EXHAUSTED）。
+
+### 6. 429 速率限制错误
+
+如果出现 `RESOURCE_EXHAUSTED` 错误：
+
+1. **启用 Redis 速率限制**（推荐）：在 `config.json` 中启用 Redis 并配置速率限制
+2. **减少 Worker 数量**：将 `workers` 设为 1 可暂时避免并发问题
+3. **调整速率限制参数**：降低 `max_requests` 或增加 `window_seconds`
 
 ## 🏭 生产部署建议
 

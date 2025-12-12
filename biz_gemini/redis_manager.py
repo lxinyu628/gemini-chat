@@ -222,6 +222,136 @@ class RedisManager:
             是否使用Redis存储
         """
         return self.enabled
+    
+    def acquire_rate_limit(
+        self,
+        key: str,
+        max_requests: int = 10,
+        window_seconds: int = 60
+    ) -> tuple[bool, float]:
+        """获取速率限制令牌（分布式安全）
+        
+        使用 Redis INCR + EXPIRE 实现滑动窗口速率限制，
+        确保多个 worker 之间的请求协调。
+        
+        Args:
+            key: 速率限制的键名（会自动添加 rate_limit: 前缀）
+            max_requests: 时间窗口内允许的最大请求数
+            window_seconds: 时间窗口大小（秒）
+            
+        Returns:
+            (allowed, wait_seconds): 是否允许请求，以及需要等待的秒数
+        """
+        full_key = self._make_key(f"rate_limit:{key}")
+        
+        if self.enabled:
+            try:
+                # 使用 Redis pipeline 保证原子性
+                pipe = self.client.pipeline()
+                pipe.incr(full_key)
+                pipe.ttl(full_key)
+                results = pipe.execute()
+                
+                current_count = results[0]
+                ttl = results[1]
+                
+                # 如果是新 key（第一次请求），设置过期时间
+                if ttl == -1:
+                    self.client.expire(full_key, window_seconds)
+                    ttl = window_seconds
+                
+                if current_count <= max_requests:
+                    return (True, 0.0)
+                else:
+                    # 超出限制，返回需要等待的时间
+                    wait_time = float(max(ttl, 1))
+                    logger.warning(f"速率限制触发: {key}, 当前请求数={current_count}, 等待={wait_time}s")
+                    return (False, wait_time)
+                    
+            except Exception as e:
+                logger.warning(f"Redis rate limit 失败，降级到内存: {e}")
+                self.enabled = False
+        
+        # 内存存储降级（单进程模式）
+        self._cleanup_expired()
+        rate_key = f"{full_key}:count"
+        expire_key = f"{full_key}:expire"
+        
+        current_time = time.time()
+        
+        # 检查是否已有计数
+        if rate_key in self._memory_store:
+            count, _ = self._memory_store[rate_key]
+            expire_time_val, _ = self._memory_store.get(expire_key, (current_time + window_seconds, None))
+            
+            if current_time >= expire_time_val:
+                # 窗口已过期，重置
+                self._memory_store[rate_key] = (1, None)
+                self._memory_store[expire_key] = (current_time + window_seconds, None)
+                return (True, 0.0)
+            
+            new_count = count + 1
+            self._memory_store[rate_key] = (new_count, None)
+            
+            if new_count <= max_requests:
+                return (True, 0.0)
+            else:
+                wait_time = expire_time_val - current_time
+                logger.warning(f"速率限制触发(内存): {key}, 当前请求数={new_count}, 等待={wait_time:.1f}s")
+                return (False, wait_time)
+        else:
+            # 首次请求
+            self._memory_store[rate_key] = (1, None)
+            self._memory_store[expire_key] = (current_time + window_seconds, None)
+            return (True, 0.0)
+    
+    def get_rate_limit_status(self, key: str) -> dict:
+        """获取速率限制状态
+        
+        Args:
+            key: 速率限制的键名
+            
+        Returns:
+            包含当前计数和剩余时间的字典
+        """
+        full_key = self._make_key(f"rate_limit:{key}")
+        
+        if self.enabled:
+            try:
+                pipe = self.client.pipeline()
+                pipe.get(full_key)
+                pipe.ttl(full_key)
+                results = pipe.execute()
+                
+                count = int(results[0]) if results[0] else 0
+                ttl = results[1] if results[1] and results[1] > 0 else 0
+                
+                return {
+                    "current_count": count,
+                    "ttl_seconds": ttl,
+                    "redis_enabled": True
+                }
+            except Exception as e:
+                logger.warning(f"获取速率限制状态失败: {e}")
+        
+        # 内存降级
+        rate_key = f"{full_key}:count"
+        expire_key = f"{full_key}:expire"
+        
+        count = 0
+        ttl = 0
+        current_time = time.time()
+        
+        if rate_key in self._memory_store:
+            count, _ = self._memory_store[rate_key]
+            expire_time_val, _ = self._memory_store.get(expire_key, (current_time, None))
+            ttl = max(0, int(expire_time_val - current_time))
+        
+        return {
+            "current_count": count,
+            "ttl_seconds": ttl,
+            "redis_enabled": False
+        }
 
 
 # 全局Redis管理器实例

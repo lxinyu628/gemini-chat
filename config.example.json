@@ -57,12 +57,19 @@
     "_comment_password": "Redis 密码，如无密码留空",
     "_comment_db": "Redis 数据库编号，默认 0",
     "_comment_key_prefix": "Redis key 前缀，避免与其他应用冲突",
+    "_comment_rate_limit": "速率限制配置 - 防止多 worker 并发请求触发 429 错误",
     "enabled": false,
     "host": "127.0.0.1",
     "port": 6379,
     "password": "",
     "db": 0,
-    "key_prefix": "gemini_chat:"
+    "key_prefix": "gemini_chat:",
+    "rate_limit": {
+      "_comment": "API 速率限制 - 默认 60 秒内最多 10 次请求",
+      "enabled": true,
+      "max_requests": 10,
+      "window_seconds": 60
+    }
   },
   "imap": {
     "_comment": "IMAP 邮箱配置 - 用于自动读取 Google 验证码",
