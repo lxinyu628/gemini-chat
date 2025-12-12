@@ -480,6 +480,8 @@ async def get_status() -> dict:
                 keep_alive._last_check = datetime.now()
                 keep_alive._last_error = None
                 keep_alive._cookie_expired = False
+                # 显式同步到 Redis（多 Worker 一致性）
+                keep_alive._sync_state_to_redis()
             except Exception:
                 pass
             mark_cookie_valid()
@@ -500,6 +502,8 @@ async def get_status() -> dict:
                 if session_status.get("expired", False):
                     keep_alive._cookie_expired = True
                     mark_cookie_expired(session_status.get("error", "session check expired"))
+                # 显式同步到 Redis（多 Worker 一致性）
+                keep_alive._sync_state_to_redis()
             except Exception:
                 pass
 
@@ -1697,10 +1701,24 @@ async def _chat_completions_handler(
             raise HTTPException(status_code=401, detail=f"配置缺失: {', '.join(missing)}，请先登录")
 
         # 检查保活服务的 session 状态（如果可用）
+        # 注意：缓存的 session_valid 可能是过期的，需要实时验证
         keep_alive = get_keep_alive_service()
         keep_alive_status = keep_alive.get_status()
         if keep_alive_status.get("last_check") and not keep_alive_status.get("session_valid", True):
-            raise HTTPException(status_code=401, detail="登录已过期，请重新登录")
+            # 缓存显示无效，尝试实时验证 getoxsrf
+            try:
+                resp, _ = request_getoxsrf(config, allow_minimal_retry=True)
+                if resp.status_code == 200:
+                    # getoxsrf 成功，更新缓存状态
+                    logger.info("缓存的 session_valid=False 但 getoxsrf 验证成功，更新状态")
+                    mark_cookie_valid()
+                else:
+                    raise HTTPException(status_code=401, detail="登录已过期，请重新登录")
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.warning(f"实时 getoxsrf 验证失败: {e}")
+                raise HTTPException(status_code=401, detail="登录已过期，请重新登录")
     except HTTPException:
         raise
     except Exception as e:
@@ -2214,11 +2232,25 @@ async def anthropic_messages(
         if missing:
             raise HTTPException(status_code=401, detail=f"配置缺失: {', '.join(missing)}，请先登录")
 
-        # 检查保活服务的 session 状态
+        # 检查保活服务的 session 状态（如果可用）
+        # 注意：缓存的 session_valid 可能是过期的，需要实时验证
         keep_alive = get_keep_alive_service()
         keep_alive_status = keep_alive.get_status()
         if keep_alive_status.get("last_check") and not keep_alive_status.get("session_valid", True):
-            raise HTTPException(status_code=401, detail="登录已过期，请重新登录")
+            # 缓存显示无效，尝试实时验证 getoxsrf
+            try:
+                resp, _ = request_getoxsrf(config, allow_minimal_retry=True)
+                if resp.status_code == 200:
+                    # getoxsrf 成功，更新缓存状态
+                    logger.info("缓存的 session_valid=False 但 getoxsrf 验证成功，更新状态")
+                    mark_cookie_valid()
+                else:
+                    raise HTTPException(status_code=401, detail="登录已过期，请重新登录")
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.warning(f"实时 getoxsrf 验证失败: {e}")
+                raise HTTPException(status_code=401, detail="登录已过期，请重新登录")
     except HTTPException:
         raise
     except Exception as e:
