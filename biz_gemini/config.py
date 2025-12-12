@@ -549,3 +549,28 @@ def clear_conversation_sessions() -> None:
     with _account_state_lock:
         _account_state["conversation_sessions"] = {}
     logger.debug("已清除所有对话 session 映射")
+
+
+def clear_redis_session_cache() -> None:
+    """清除 Redis 中的 session 缓存（登录/Cookie 刷新后调用）
+    
+    当 csesidx 变化时，旧的 session 归属于旧用户，需要清除缓存以避免
+    403 PERMISSION_DENIED "Session is not owned by the provided user" 错误。
+    """
+    try:
+        from .redis_manager import get_redis_manager
+        config = load_config()
+        redis_mgr = get_redis_manager(config)
+        if redis_mgr.is_redis_enabled():
+            group_id = config.get("group_id")
+            if group_id:
+                # 清除 session:{group_id} 缓存
+                redis_key = f"session:{group_id}"
+                redis_mgr.delete(redis_key)
+                logger.info(f"已清除 Redis session 缓存: {redis_key}")
+            
+            # 同时清除 JWT 缓存（确保一致性）
+            redis_mgr.delete("jwt_token")
+            logger.debug("已清除 Redis JWT 缓存")
+    except Exception as e:
+        logger.debug(f"清除 Redis session 缓存失败（可忽略）: {e}")

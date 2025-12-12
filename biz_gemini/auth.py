@@ -14,6 +14,7 @@ from .config import (
     TIME_FMT,
     clear_conversation_sessions,
     clear_jwt_cache,
+    clear_redis_session_cache,
     cookies_expired,
     get_cached_jwt,
     get_proxy,
@@ -777,6 +778,7 @@ def on_cookie_refreshed() -> None:
     """Cookie 刷新后的回调，清理 JWT 和 session 缓存"""
     clear_jwt_cache()
     clear_conversation_sessions()
+    clear_redis_session_cache()  # 清除 Redis 中的旧 session 缓存，避免 403 错误
     mark_cookie_valid()
     logger.info("Cookie 已刷新，JWT 和 session 缓存已清除")
 
