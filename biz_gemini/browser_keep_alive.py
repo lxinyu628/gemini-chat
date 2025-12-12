@@ -169,42 +169,52 @@ class BrowserKeepAliveService:
             if cookie_profile_dir:
                 import os
                 if os.path.exists(cookie_profile_dir):
-                    logger.info(f"使用持久化浏览器配置文件: {cookie_profile_dir}")
-                    try:
-                        self._browser = await self._playwright.chromium.launch_persistent_context(
-                            cookie_profile_dir,
-                            headless=self.headless,
-                            channel="chrome",
-                            args=launch_args,
-                            viewport={"width": 1920, "height": 1080},
-                            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                            locale="zh-CN",
-                            timezone_id="Asia/Shanghai",
-                            ignore_https_errors=True,
-                            proxy={"server": playwright_proxy} if playwright_proxy else None,
-                        )
-                        self._context = self._browser
-                        self._use_persistent_context = True
-
-                        await self._context.add_init_script("""
-                            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-                            Object.defineProperty(navigator, 'plugins', {
-                                get: () => [
-                                    { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer' },
-                                    { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai' },
-                                    { name: 'Native Client', filename: 'internal-nacl-plugin' }
-                                ]
-                            });
-                            Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en'] });
-                            window.chrome = { runtime: {}, loadTimes: function() {}, csi: function() {}, app: {} };
-                        """)
-
-                        logger.info(f"浏览器已初始化 (持久化模式, 代理: {playwright_proxy}, 无头: {self.headless})")
-                        return True
-                    except Exception as e:
-                        logger.warning(f"持久化模式启动失败 ({e})，回退到普通模式")
+                    # 检查目录是否为空（没有浏览器数据）
+                    dir_contents = os.listdir(cookie_profile_dir)
+                    if not dir_contents:
+                        logger.warning(f"cookie_profile_dir 目录为空（无浏览器数据），回退到普通模式: {cookie_profile_dir}")
+                        cookie_profile_dir = None  # 回退到普通模式
+                    else:
+                        logger.info(f"使用持久化浏览器配置文件: {cookie_profile_dir} (包含 {len(dir_contents)} 个文件/目录)")
                 else:
                     logger.warning(f"cookie_profile_dir 不存在: {cookie_profile_dir}")
+                    cookie_profile_dir = None  # 回退到普通模式
+            
+            # 使用持久化上下文模式
+            if cookie_profile_dir:
+                try:
+                    self._browser = await self._playwright.chromium.launch_persistent_context(
+                        cookie_profile_dir,
+                        headless=self.headless,
+                        channel="chrome",
+                        args=launch_args,
+                        viewport={"width": 1920, "height": 1080},
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        locale="zh-CN",
+                        timezone_id="Asia/Shanghai",
+                        ignore_https_errors=True,
+                        proxy={"server": playwright_proxy} if playwright_proxy else None,
+                    )
+                    self._context = self._browser
+                    self._use_persistent_context = True
+
+                    await self._context.add_init_script("""
+                        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                        Object.defineProperty(navigator, 'plugins', {
+                            get: () => [
+                                { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer' },
+                                { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai' },
+                                { name: 'Native Client', filename: 'internal-nacl-plugin' }
+                            ]
+                        });
+                        Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en'] });
+                        window.chrome = { runtime: {}, loadTimes: function() {}, csi: function() {}, app: {} };
+                    """)
+
+                    logger.info(f"浏览器已初始化 (持久化模式, 代理: {playwright_proxy}, 无头: {self.headless})")
+                    return True
+                except Exception as e:
+                    logger.warning(f"持久化模式启动失败 ({e})，回退到普通模式")
 
             self._use_persistent_context = False
 

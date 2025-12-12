@@ -64,12 +64,16 @@ class RemoteBrowserSession:
         self._custom_profile_dir = profile_dir  # 显式指定的目录
         self._temp_profile_dir: Optional[str] = None  # 实际使用的临时目录路径
         self._start_url = start_url or "https://business.gemini.google/"
+        self._use_persistent_context = False  # 是否使用持久化上下文模式
 
     def _prepare_profile_dir(self) -> Optional[str]:
         """准备用户数据目录
 
         如果显式指定了 profile_dir，则使用它；
-        否则使用临时目录，并在启动前清空以避免旧账号/旧 cookie 污染。
+        否则使用临时目录。
+
+        注意：持久化模式下不再清空目录，以便复用浏览器数据（Cookie等）。
+        如果需要干净的环境（如首次登录），应该手动删除目录或使用新的 session_id。
 
         Returns:
             用户数据目录路径，如果不使用持久化则返回 None
@@ -82,17 +86,21 @@ class RemoteBrowserSession:
         # 使用临时目录策略
         self._temp_profile_dir = os.path.join(_TEMP_PROFILE_BASE, f"session_{self.session_id}")
 
-        # 清空现有目录（避免旧账号/旧 cookie 污染）
+        # 检查目录是否已存在且有内容（持久化数据）
         if os.path.exists(self._temp_profile_dir):
-            logger.info(f"清空临时用户数据目录: {self._temp_profile_dir}")
-            try:
-                shutil.rmtree(self._temp_profile_dir)
-            except Exception as e:
-                logger.warning(f"清空临时目录失败: {e}")
+            dir_contents = os.listdir(self._temp_profile_dir)
+            if dir_contents:
+                # 目录有内容，复用它以保持登录状态
+                logger.info(f"复用已有的浏览器数据目录: {self._temp_profile_dir} (包含 {len(dir_contents)} 个文件/目录)")
+                return self._temp_profile_dir
+            else:
+                # 目录是空的，可以直接使用
+                logger.info(f"使用空的浏览器数据目录: {self._temp_profile_dir}")
+                return self._temp_profile_dir
 
-        # 创建新目录
+        # 目录不存在，创建新目录
         os.makedirs(self._temp_profile_dir, exist_ok=True)
-        logger.info(f"使用临时用户数据目录: {self._temp_profile_dir}")
+        logger.info(f"创建新的浏览器数据目录: {self._temp_profile_dir}")
 
         return self._temp_profile_dir
 
@@ -130,7 +138,7 @@ class RemoteBrowserSession:
 
             self._playwright = await async_playwright().start()
 
-            # 优先尝试以“真浏览器”形态启动 Chrome，减少被判定为不安全的概率
+            # 优先尝试以"真浏览器"形态启动 Chrome，减少被判定为不安全的概率
             launch_args = [
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
@@ -144,43 +152,99 @@ class RemoteBrowserSession:
             remote_browser_config = config.get("remote_browser", {})
             headless = remote_browser_config.get("headless", True)
 
-            launch_kwargs = {
+            logger.info(f"浏览器启动模式: headless={headless}, profile_dir={profile_dir}")
+
+            # 持久化上下文选项
+            persistent_context_options = {
                 "headless": headless,
                 "args": launch_args,
-            }
-
-            logger.info(f"浏览器启动模式: headless={headless}")
-
-            browser = None
-            # 优先使用系统 Chrome（若 playwright 安装了 chrome）
-            try:
-                browser = await self._playwright.chromium.launch(channel="chrome", **launch_kwargs)
-                logger.info("使用 Chrome channel 启动浏览器")
-            except Exception as chrome_err:  # noqa: BLE001
-                logger.warning(f"Chrome channel 启动失败，回退 chromium: {chrome_err}")
-                browser = await self._playwright.chromium.launch(**launch_kwargs)
-
-            self._browser = browser
-
-            # 创建上下文（带代理）
-            context_options = {
                 "viewport": {"width": self.viewport_width, "height": self.viewport_height},
                 "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+                "locale": "zh-CN",
+                "timezone_id": "Asia/Shanghai",
+                "ignore_https_errors": True,
             }
             if playwright_proxy:
-                context_options["proxy"] = playwright_proxy
+                persistent_context_options["proxy"] = playwright_proxy
 
-            self._context = await self._browser.new_context(**context_options)
+            # 使用持久化上下文模式
+            if profile_dir:
+                # 持久化模式：浏览器数据会自动保存到 profile_dir
+                logger.info(f"使用持久化浏览器上下文: {profile_dir}")
+                try:
+                    # 优先使用系统 Chrome
+                    self._context = await self._playwright.chromium.launch_persistent_context(
+                        profile_dir,
+                        channel="chrome",
+                        **persistent_context_options,
+                    )
+                    logger.info("使用 Chrome channel 启动持久化浏览器")
+                except Exception as chrome_err:
+                    logger.warning(f"Chrome channel 启动失败，回退 chromium: {chrome_err}")
+                    self._context = await self._playwright.chromium.launch_persistent_context(
+                        profile_dir,
+                        **persistent_context_options,
+                    )
+                
+                # 持久化模式下 _browser 不使用，但保持兼容性
+                self._browser = None
+                self._use_persistent_context = True
+                logger.info(f"持久化浏览器上下文已创建，数据目录: {profile_dir}")
+            else:
+                # 普通模式：浏览器数据不会持久化
+                logger.info("使用普通浏览器模式（数据不会持久化）")
+                self._use_persistent_context = False
+                
+                try:
+                    self._browser = await self._playwright.chromium.launch(
+                        channel="chrome",
+                        headless=headless,
+                        args=launch_args,
+                    )
+                    logger.info("使用 Chrome channel 启动浏览器")
+                except Exception as chrome_err:
+                    logger.warning(f"Chrome channel 启动失败，回退 chromium: {chrome_err}")
+                    self._browser = await self._playwright.chromium.launch(
+                        headless=headless,
+                        args=launch_args,
+                    )
+
+                # 创建上下文（带代理）
+                context_options = {
+                    "viewport": {"width": self.viewport_width, "height": self.viewport_height},
+                    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+                    "locale": "zh-CN",
+                    "timezone_id": "Asia/Shanghai",
+                    "ignore_https_errors": True,
+                }
+                if playwright_proxy:
+                    context_options["proxy"] = playwright_proxy
+
+                self._context = await self._browser.new_context(**context_options)
+
             # 隐藏自动化标识，降低账号登录时的安全提示概率
             try:
-                await self._context.add_init_script(
-                    "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
-                )
+                await self._context.add_init_script("""
+                    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+                    Object.defineProperty(navigator, 'plugins', {
+                        get: () => [
+                            { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer' },
+                            { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai' },
+                            { name: 'Native Client', filename: 'internal-nacl-plugin' }
+                        ]
+                    });
+                    Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en'] });
+                    window.chrome = { runtime: {}, loadTimes: function() {}, csi: function() {}, app: {} };
+                """)
             except Exception as e:
                 logger.debug(f"设置 webdriver 伪装失败: {e}")
 
-            # 创建页面
-            self._page = await self._context.new_page()
+            # 创建页面（持久化模式下可能已有页面，或创建新页面）
+            pages = self._context.pages
+            if pages:
+                self._page = pages[0]
+            else:
+                self._page = await self._context.new_page()
 
             # 监听 URL 变化
             self._page.on("framenavigated", self._on_navigation)
@@ -762,27 +826,57 @@ class RemoteBrowserSession:
         """停止浏览器"""
         self.status = BrowserSessionStatus.STOPPED
 
+        # 取消截图任务
         if self._screenshot_task:
             self._screenshot_task.cancel()
             try:
                 await self._screenshot_task
             except asyncio.CancelledError:
                 pass
+            self._screenshot_task = None
 
-        if self._page:
-            await self._page.close()
-            self._page = None
+        # 取消验证码任务
+        self._cancel_verification_task()
 
-        if self._context:
-            await self._context.close()
-            self._context = None
+        # 持久化模式和普通模式的资源清理方式不同
+        if self._use_persistent_context:
+            # 持久化模式：直接关闭 context（会自动保存数据和关闭页面）
+            if self._context:
+                try:
+                    await self._context.close()
+                except Exception as e:
+                    logger.warning(f"关闭持久化上下文时出错: {e}")
+                self._context = None
+            self._page = None  # 页面随 context 一起关闭
+            logger.info("持久化浏览器上下文已关闭，数据已保存")
+        else:
+            # 普通模式：依次关闭 page -> context -> browser
+            if self._page:
+                try:
+                    await self._page.close()
+                except Exception:
+                    pass
+                self._page = None
 
-        if self._browser:
-            await self._browser.close()
-            self._browser = None
+            if self._context:
+                try:
+                    await self._context.close()
+                except Exception:
+                    pass
+                self._context = None
+
+            if self._browser:
+                try:
+                    await self._browser.close()
+                except Exception:
+                    pass
+                self._browser = None
 
         if self._playwright:
-            await self._playwright.stop()
+            try:
+                await self._playwright.stop()
+            except Exception:
+                pass
             self._playwright = None
 
         await self._notify_status()
