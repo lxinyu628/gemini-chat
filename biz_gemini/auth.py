@@ -296,15 +296,33 @@ def check_session_status(config: Optional[dict] = None) -> dict:
                     }
 
         if resp.status_code != 200:
-            return {
-                "valid": False,
-                "expired": True,
-                "warning": False,
-                "username": None,
-                "error": f"HTTP {resp.status_code}",
-                "raw_response": None,
-                "cookie_debug": cookie_debug,
-            }
+            # 非 200 状态，尝试 getoxsrf 回退验证
+            # 因为 list-sessions 有时返回错误但 Cookie 仍然有效
+            try:
+                _get_jwt_via_api(config)
+                # getoxsrf 成功，说明 Cookie 有效
+                logger.info(f"list-sessions 返回 HTTP {resp.status_code}，但 getoxsrf 验证成功")
+                return {
+                    "valid": True,
+                    "expired": False,
+                    "warning": True,
+                    "username": None,
+                    "error": f"list-sessions 返回 HTTP {resp.status_code}，但 getoxsrf 验证成功",
+                    "raw_response": None,
+                    "cookie_debug": cookie_debug,
+                }
+            except Exception as e:
+                # getoxsrf 也失败，确认过期
+                logger.warning(f"list-sessions 返回 HTTP {resp.status_code}，getoxsrf 也失败: {e}")
+                return {
+                    "valid": False,
+                    "expired": True,
+                    "warning": False,
+                    "username": None,
+                    "error": f"HTTP {resp.status_code}",
+                    "raw_response": None,
+                    "cookie_debug": cookie_debug,
+                }
 
         text = resp.text
         # 处理可能的前缀

@@ -441,6 +441,8 @@ def mark_cookie_expired(reason: str = "") -> None:
         _account_state["available"] = False
         if reason:
             _account_state["cooldown_reason"] = reason
+    # 同步到 Redis（多 Worker 一致性）
+    _sync_cookie_state_to_redis(expired=True, reason=reason)
     logger.info(f"Cookie 已标记为过期: {reason}")
 
 
@@ -453,12 +455,59 @@ def mark_cookie_valid() -> None:
         _account_state["cooldown_until"] = 0
         _account_state["cooldown_reason"] = ""
         _account_state["last_refresh_time"] = time.time()
+    # 同步到 Redis（多 Worker 一致性）
+    _sync_cookie_state_to_redis(expired=False, reason="")
 
 
 def is_cookie_expired() -> bool:
-    """检查 Cookie 是否已标记为过期"""
+    """检查 Cookie 是否已标记为过期
+    
+    优先从 Redis 读取（多 Worker 一致性），回退到本地内存状态。
+    """
+    # 优先从 Redis 读取共享状态
+    redis_state = _load_cookie_state_from_redis()
+    if redis_state is not None:
+        return redis_state
+    # 回退到本地内存状态
     with _account_state_lock:
         return _account_state.get("cookie_expired", False)
+
+
+def _sync_cookie_state_to_redis(expired: bool, reason: str = "") -> None:
+    """将 Cookie 状态同步到 Redis（供其他 Worker 读取）"""
+    try:
+        from .redis_manager import get_redis_manager
+        config = load_config()
+        redis_mgr = get_redis_manager(config)
+        if redis_mgr.is_redis_enabled():
+            import time
+            state = {
+                "cookie_expired": expired,
+                "reason": reason,
+                "timestamp": time.time(),
+            }
+            redis_mgr.set_json("cookie_state", state, ex=600)  # 10 分钟过期
+    except Exception as e:
+        logger.debug(f"同步 Cookie 状态到 Redis 失败: {e}")
+
+
+def _load_cookie_state_from_redis() -> Optional[bool]:
+    """从 Redis 读取 Cookie 状态（多 Worker 一致性）
+    
+    Returns:
+        Cookie 是否过期，如果 Redis 不可用则返回 None
+    """
+    try:
+        from .redis_manager import get_redis_manager
+        config = load_config()
+        redis_mgr = get_redis_manager(config)
+        if redis_mgr.is_redis_enabled():
+            state = redis_mgr.get_json("cookie_state")
+            if state and isinstance(state, dict):
+                return state.get("cookie_expired", False)
+    except Exception as e:
+        logger.debug(f"从 Redis 读取 Cookie 状态失败: {e}")
+    return None
 
 
 def set_cooldown(duration_seconds: int, reason: str = "") -> None:
