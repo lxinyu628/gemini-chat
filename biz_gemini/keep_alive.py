@@ -54,6 +54,18 @@ class KeepAliveService:
         self._callbacks: List[Callable] = []
         self._cookie_expired: bool = False
         self._pending_refresh: bool = False  # 是否有待处理的刷新请求
+        
+        # Redis 状态同步（用于多 Worker 状态共享）
+        self._redis_manager = None
+        self._redis_state_key = "keep_alive_state"
+        try:
+            from .redis_manager import get_redis_manager
+            config = load_config()
+            self._redis_manager = get_redis_manager(config)
+            if self._redis_manager.is_redis_enabled():
+                logger.info("✅ KeepAliveService 已启用 Redis 状态同步")
+        except Exception as e:
+            logger.debug(f"Redis 状态同步不可用: {e}")
 
     def add_callback(self, callback: Callable) -> None:
         """添加状态变更回调"""
@@ -130,6 +142,7 @@ class KeepAliveService:
                 self._session_valid = False
                 self._cookie_expired = True
                 self._last_error = "缺少登录凭证（secure_c_ses/csesidx）"
+                self._sync_state_to_redis()
                 return
 
             if is_cookie_expired():
@@ -138,6 +151,7 @@ class KeepAliveService:
                 self._session_valid = False
                 self._last_check = datetime.now()
                 self._last_error = "Cookie 已标记为过期"
+                self._sync_state_to_redis()
 
                 if self.auto_browser_refresh and self._pending_refresh:
                     await self._try_browser_refresh()
@@ -157,6 +171,7 @@ class KeepAliveService:
                 self._refresh_count += 1
                 self._last_error = None
                 mark_cookie_valid()
+                self._sync_state_to_redis()  # 同步到 Redis
 
                 logger.info(f"刷新成功 (第 {self._refresh_count} 次)")
                 self._notify("refreshed", {
@@ -167,6 +182,7 @@ class KeepAliveService:
             else:
                 logger.debug("浏览器刷新失败")
                 self._session_valid = False
+                self._sync_state_to_redis()
 
         except Exception as e:
             self._error_count += 1
@@ -184,12 +200,14 @@ class KeepAliveService:
                 self._session_valid = False
                 self._cookie_expired = True
                 mark_cookie_expired(error_msg)
+                self._sync_state_to_redis()
                 self._notify("expired", {"error": error_msg})
 
                 if self.auto_browser_refresh:
                     await self._try_browser_refresh()
             else:
                 logger.warning(f"刷新失败: {error_msg}")
+                self._sync_state_to_redis()
                 self._notify("error", {"error": error_msg})
 
     async def _try_browser_refresh(self) -> bool:
@@ -205,6 +223,7 @@ class KeepAliveService:
                 self._cookie_expired = False
                 self._session_valid = True
                 on_cookie_refreshed()
+                self._sync_state_to_redis()  # 同步到 Redis
                 self._notify("cookie_refreshed", {"method": "browser"})
                 return True
             elif result.get("needs_manual_login"):
@@ -271,8 +290,65 @@ class KeepAliveService:
                 "error": str(e)
             }
 
+    def _sync_state_to_redis(self) -> None:
+        """将状态同步到 Redis（供其他 Worker 读取）"""
+        if not self._redis_manager or not self._redis_manager.is_redis_enabled():
+            return
+        
+        try:
+            state = {
+                "last_refresh": self._last_refresh.isoformat() if self._last_refresh else None,
+                "last_check": self._last_check.isoformat() if self._last_check else None,
+                "refresh_count": self._refresh_count,
+                "error_count": self._error_count,
+                "last_error": self._last_error,
+                "session_valid": self._session_valid,
+                "session_username": self._session_username,
+                "cookie_expired": self._cookie_expired,
+            }
+            # 状态缓存 10 分钟（与保活间隔一致）
+            self._redis_manager.set_json(self._redis_state_key, state, ex=600)
+        except Exception as e:
+            logger.debug(f"同步状态到 Redis 失败: {e}")
+    
+    def _load_state_from_redis(self) -> Optional[dict]:
+        """从 Redis 读取共享状态"""
+        if not self._redis_manager or not self._redis_manager.is_redis_enabled():
+            return None
+        
+        try:
+            return self._redis_manager.get_json(self._redis_state_key)
+        except Exception as e:
+            logger.debug(f"从 Redis 读取状态失败: {e}")
+            return None
+
     def get_status(self) -> dict:
-        """获取保活服务状态"""
+        """获取保活服务状态
+        
+        优先从 Redis 读取共享状态（多 Worker 一致性），
+        回退到本地内存状态。
+        """
+        # 先尝试从 Redis 读取共享状态
+        redis_state = self._load_state_from_redis()
+        
+        if redis_state:
+            # Redis 中有状态，使用共享状态
+            return {
+                "running": self._running,  # 本进程状态
+                "interval_minutes": self.interval_minutes,
+                "auto_browser_refresh": self.auto_browser_refresh,
+                "last_refresh": redis_state.get("last_refresh"),
+                "last_check": redis_state.get("last_check"),
+                "refresh_count": redis_state.get("refresh_count", 0),
+                "error_count": redis_state.get("error_count", 0),
+                "last_error": redis_state.get("last_error"),
+                "session_valid": redis_state.get("session_valid", True),
+                "session_username": redis_state.get("session_username"),
+                "cookie_expired": redis_state.get("cookie_expired", False),
+                "pending_refresh": self._pending_refresh,  # 本进程状态
+            }
+        
+        # Redis 不可用，使用本地内存状态
         return {
             "running": self._running,
             "interval_minutes": self.interval_minutes,

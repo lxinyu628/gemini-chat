@@ -457,12 +457,15 @@ async def get_status() -> dict:
                 is_stale = (datetime.now() - last_check_ts).total_seconds() > 300
 
             if session_valid and not is_stale:
+                # 多 Worker 模式下，非主 Worker 的 session_username 可能为空
+                # 使用 config 中的 username 作为备选
+                effective_username = session_username or config.get("username")
                 return {
                     "logged_in": True,
                     "session_valid": True,
-                    "username": session_username,
+                    "username": effective_username,
                     "last_check": keep_alive_status.get("last_check"),
-                    "message": f"已登录: {session_username}" if session_username else "已登录",
+                    "message": f"已登录: {effective_username}" if effective_username else "已登录",
                     "account_chooser_url": account_chooser_url,
                 }
 
