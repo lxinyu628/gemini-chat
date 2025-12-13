@@ -121,41 +121,180 @@ _is_primary_worker = False
 
 
 def _check_primary_worker() -> bool:
-    """使用文件锁确保后台服务只启动一份（无论是否多 worker）"""
+    """使用分布式锁确保后台服务只启动一份（无论是否多 worker）
+    
+    优先使用 Redis 分布式锁（适用于多 worker 环境），
+    回退到文件锁（适用于单 worker 或 Redis 不可用的情况）。
+    
+    使用 PID 文件检测遗留锁，如果锁文件存在但进程已不存在，自动清理锁。
+    """
     import os
     import tempfile
+    import time
 
     lock_file = os.path.join(tempfile.gettempdir(), "gemini_chat_browser_keep_alive.lock")
+    pid_file = os.path.join(tempfile.gettempdir(), "gemini_chat_browser_keep_alive.pid")
+    current_pid = os.getpid()
 
-    try:
-        # Windows 使用 msvcrt，Unix 使用 fcntl
-        if os.name == "nt":
-            import msvcrt
+    def _is_process_running(pid: int) -> bool:
+        """检查 PID 对应的进程是否存在"""
+        try:
+            os.kill(pid, 0)  # 不发送信号，只检查进程是否存在
+            return True
+        except (OSError, ProcessLookupError):
+            return False
 
-            lock_fd = open(lock_file, "w")
-            try:
-                msvcrt.locking(lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
-                globals()["_lock_fd"] = lock_fd
-                return True
-            except (IOError, OSError):
-                lock_fd.close()
+    def _cleanup_stale_lock():
+        """清理遗留的锁文件"""
+        try:
+            if os.path.exists(pid_file):
+                with open(pid_file, "r") as f:
+                    old_pid = int(f.read().strip())
+                if not _is_process_running(old_pid):
+                    logger.info(f"检测到遗留锁文件 (旧 PID {old_pid} 已不存在)，正在清理...")
+                    try:
+                        os.remove(lock_file)
+                    except Exception:
+                        pass
+                    try:
+                        os.remove(pid_file)
+                    except Exception:
+                        pass
+                    return True
+        except Exception as e:
+            logger.debug(f"清理遗留锁时出错（可忽略）: {e}")
+        return False
+
+    def _try_redis_lock() -> bool:
+        """尝试使用 Redis 获取分布式锁"""
+        try:
+            from biz_gemini.redis_manager import get_redis_manager
+            config = load_config()
+            redis_mgr = get_redis_manager(config)
+            
+            if not redis_mgr.is_redis_enabled():
                 return False
-        else:
-            import fcntl
-
-            lock_fd = open(lock_file, "w")
-            try:
-                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                globals()["_lock_fd"] = lock_fd
-                return True
-            except (IOError, OSError, BlockingIOError):
-                lock_fd.close()
+            
+            redis_client = redis_mgr._client
+            if not redis_client:
                 return False
+            
+            # 使用带前缀的 key，与 RedisManager 保持一致
+            key_prefix = redis_mgr.key_prefix  # 默认为 "gemini_chat:"
+            lock_key = f"{key_prefix}primary_worker_lock"
+            lock_value = f"{current_pid}:{time.time()}"
+            
+            # 尝试获取锁（TTL 120 秒，比保活间隔长）
+            # 使用 SET NX EX 原子操作
+            acquired = redis_client.set(lock_key, lock_value, nx=True, ex=120)
+            
+            if acquired:
+                logger.info(f"通过 Redis 获取主 worker 锁成功 (PID: {current_pid})")
+                globals()["_redis_lock_key"] = lock_key
+                globals()["_redis_lock_value"] = lock_value
+                
+                # 启动后台任务定期续约锁
+                import asyncio
+                async def _renew_lock():
+                    while True:
+                        try:
+                            await asyncio.sleep(30)  # 每 30 秒续约一次
+                            if redis_client.get(lock_key) == lock_value.encode():
+                                redis_client.expire(lock_key, 120)
+                                logger.debug(f"Redis 主 worker 锁已续约")
+                        except Exception as e:
+                            logger.debug(f"续约 Redis 锁失败: {e}")
+                            break
+                
+                # 在当前事件循环中创建任务（如果有的话）
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(_renew_lock())
+                except RuntimeError:
+                    # 没有运行中的事件循环，跳过续约
+                    pass
+                
+                return True
+            else:
+                # 检查现有锁是否过期（持有者进程崩溃的情况）
+                existing = redis_client.get(lock_key)
+                if existing:
+                    try:
+                        existing_str = existing.decode() if isinstance(existing, bytes) else existing
+                        existing_pid = int(existing_str.split(":")[0])
+                        if not _is_process_running(existing_pid):
+                            # 持有锁的进程已死，删除锁并重试
+                            logger.info(f"检测到 Redis 锁持有者 (PID {existing_pid}) 已不存在，清理锁...")
+                            redis_client.delete(lock_key)
+                            # 重试获取锁
+                            acquired = redis_client.set(lock_key, lock_value, nx=True, ex=120)
+                            if acquired:
+                                logger.info(f"清理后通过 Redis 获取主 worker 锁成功 (PID: {current_pid})")
+                                globals()["_redis_lock_key"] = lock_key
+                                globals()["_redis_lock_value"] = lock_value
+                                return True
+                    except Exception as e:
+                        logger.debug(f"检查 Redis 锁持有者失败: {e}")
+                
+                logger.debug(f"Redis 主 worker 锁已被其他进程持有")
+                return False
+                
+        except Exception as e:
+            logger.debug(f"尝试 Redis 分布式锁失败（将回退到文件锁）: {e}")
+            return False
 
-    except Exception as e:
-        # 任何异常都回退到允许运行（单 worker 模式或无法获取锁）
-        logger.warning(f"检查主 worker 时出错，默认允许运行: {e}")
+    def _try_file_lock() -> bool:
+        """尝试使用文件锁"""
+        try:
+            # 尝试清理遗留锁
+            _cleanup_stale_lock()
+
+            # Windows 使用 msvcrt，Unix 使用 fcntl
+            if os.name == "nt":
+                import msvcrt
+
+                lock_fd = open(lock_file, "w")
+                try:
+                    msvcrt.locking(lock_fd.fileno(), msvcrt.LK_NBLCK, 1)
+                    globals()["_lock_fd"] = lock_fd
+                    # 写入当前 PID
+                    with open(pid_file, "w") as f:
+                        f.write(str(current_pid))
+                    return True
+                except (IOError, OSError):
+                    lock_fd.close()
+                    return False
+            else:
+                import fcntl
+
+                lock_fd = open(lock_file, "w")
+                try:
+                    fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    globals()["_lock_fd"] = lock_fd
+                    # 写入当前 PID
+                    with open(pid_file, "w") as f:
+                        f.write(str(current_pid))
+                    logger.info(f"通过文件锁获取主 worker 锁成功 (PID: {current_pid})")
+                    return True
+                except (IOError, OSError, BlockingIOError):
+                    lock_fd.close()
+                    return False
+
+        except Exception as e:
+            logger.warning(f"尝试文件锁失败: {e}")
+            return False
+
+    # 优先尝试 Redis 分布式锁
+    if _try_redis_lock():
         return True
+    
+    # 回退到文件锁
+    if _try_file_lock():
+        return True
+    
+    # 都失败了
+    logger.info(f"无法获取主 worker 锁 (PID: {current_pid})，将作为普通 worker 运行")
+    return False
 
 
 def _build_account_chooser_url(config: dict) -> Optional[str]:

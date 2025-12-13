@@ -1039,10 +1039,12 @@ async def _auto_login_flow(page, context, config: dict) -> dict:
     try:
         # 获取保存的用户邮箱
         session_config = config.get("session", {})
-        username = session_config.get("username")
+        username = session_config.get("username") or config.get("username")
 
         if not username:
             logger.warning("[自动登录] 未找到保存的用户邮箱，无法自动登录")
+            logger.debug(f"[自动登录] session_config keys: {list(session_config.keys())}")
+            logger.debug(f"[自动登录] config keys: {list(config.keys())[:20]}...")
             return {
                 "success": False,
                 "message": "未找到保存的用户邮箱，请先手动登录一次",
