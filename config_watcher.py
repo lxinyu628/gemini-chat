@@ -1,11 +1,20 @@
-"""配置文件监控模块，实现配置热重载功能"""
+"""配置文件监控模块，实现配置热重载功能。
+
+使用 watchdog 库监控 config.json 文件变更，自动触发配置重载。
+支持 session 变更检测，自动清除 JWT 缓存和重置保活服务状态。
+"""
+import logging
 import time
 from pathlib import Path
 from typing import Callable, Optional
+
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileModifiedEvent
 
 from biz_gemini.config import NEW_CONFIG_FILE, reload_config, load_config
+
+# 模块级 logger
+logger = logging.getLogger("config_watcher")
 
 # Session 相关的关键字段，变更时需要清除缓存
 SESSION_FIELDS = {"secure_c_ses", "host_c_oses", "csesidx", "cookie_raw"}
@@ -34,7 +43,7 @@ class ConfigFileEventHandler(FileSystemEventHandler):
         self._old_config: Optional[dict] = None
 
     def on_modified(self, event):
-        """文件修改事件处理"""
+        """处理文件变更事件"""
         if isinstance(event, FileModifiedEvent):
             # 只监控 config.json
             if Path(event.src_path).resolve() == NEW_CONFIG_FILE.resolve():
@@ -45,22 +54,19 @@ class ConfigFileEventHandler(FileSystemEventHandler):
                     return
 
                 self.last_reload_time = current_time
-                print(f"[*] 检测到配置文件变更: {event.src_path}")
+                logger.info(f"检测到配置文件变更: {event.src_path}")
 
                 try:
-                    # 保存旧配置
                     old_config = self._old_config
-
-                    # 重新加载配置
                     new_config = reload_config()
-                    print("[+] 配置重载成功")
+                    logger.info("配置重载成功")
 
                     # 检查 session 是否变更，如果变更则清除缓存
                     if old_config and _check_session_changed(old_config, new_config):
                         try:
                             from biz_gemini.auth import on_cookie_refreshed
                             on_cookie_refreshed()
-                            print("[+] 检测到 session 变更，已清除 JWT 缓存和过期标记")
+                            logger.info("检测到 session 变更，已清除 JWT 缓存和过期标记")
 
                             # 同时重置保活服务的内部状态
                             try:
@@ -69,21 +75,19 @@ class ConfigFileEventHandler(FileSystemEventHandler):
                                 keep_alive._session_valid = True
                                 keep_alive._cookie_expired = False
                                 keep_alive._last_error = None
-                                keep_alive._last_check = None  # 强制下次检查时重新验证
-                                print("[+] 已重置保活服务状态")
+                                keep_alive._last_check = None
+                                logger.info("已重置保活服务状态")
                             except Exception as e:
-                                print(f"[!] 重置保活服务状态失败: {e}")
+                                logger.warning(f"重置保活服务状态失败: {e}")
                         except Exception as e:
-                            print(f"[!] 清除缓存失败: {e}")
+                            logger.warning(f"清除缓存失败: {e}")
 
-                    # 更新旧配置
                     self._old_config = new_config
 
-                    # 调用回调函数
                     if self.callback:
                         self.callback(new_config)
                 except Exception as e:
-                    print(f"[!] 配置重载失败: {e}")
+                    logger.error(f"配置重载失败: {e}")
 
 
 class ConfigWatcher:
@@ -100,17 +104,16 @@ class ConfigWatcher:
         self.observer: Optional[Observer] = None
         self.event_handler: Optional[ConfigFileEventHandler] = None
     
-    def start(self):
-        """启动监控"""
+    def start(self) -> None:
+        """启动监控。"""
         if self.observer and self.observer.is_alive():
-            print("[!] 配置监控器已在运行")
+            logger.warning("配置监控器已在运行")
             return
-        
+
         if not NEW_CONFIG_FILE.exists():
-            print(f"[!] 配置文件不存在: {NEW_CONFIG_FILE}")
+            logger.warning(f"配置文件不存在: {NEW_CONFIG_FILE}")
             return
-        
-        # 创建事件处理器
+
         self.event_handler = ConfigFileEventHandler(self.callback)
 
         # 初始化旧配置（用于检测 session 变更）
@@ -119,25 +122,20 @@ class ConfigWatcher:
         except Exception:
             self.event_handler._old_config = None
 
-        # 创建观察者
         self.observer = Observer()
-
-        # 监控配置文件所在目录
         watch_dir = NEW_CONFIG_FILE.parent
         self.observer.schedule(self.event_handler, str(watch_dir), recursive=False)
-
-        # 启动观察者
         self.observer.start()
-        print(f"[+] 配置监控已启动，监控文件: {NEW_CONFIG_FILE}")
-    
-    def stop(self):
-        """停止监控"""
+        logger.info(f"配置监控已启动，监控文件: {NEW_CONFIG_FILE}")
+
+    def stop(self) -> None:
+        """停止监控。"""
         if self.observer and self.observer.is_alive():
             self.observer.stop()
             self.observer.join(timeout=5)
-            print("[+] 配置监控已停止")
+            logger.info("配置监控已停止")
         else:
-            print("[!] 配置监控器未运行")
+            logger.debug("配置监控器未运行")
     
     def is_running(self) -> bool:
         """检查监控器是否运行中"""

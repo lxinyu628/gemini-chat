@@ -1,3 +1,11 @@
+"""认证模块，提供 JWT 生成、Cookie 管理和登录功能。
+
+该模块提供：
+- JWT 创建和验证（HMAC-SHA256 签名）
+- Cookie 管理（Google 会话 Cookie 的提取、保存、过期检测）
+- XSRF 令牌处理
+- 浏览器自动登录
+"""
 import base64
 import hashlib
 import hmac
@@ -36,12 +44,35 @@ LIST_SESSIONS_URL = "https://auth.business.gemini.google/list-sessions"
 
 
 def url_safe_b64encode(data: bytes) -> str:
-    """URL 安全的 Base64（无 padding）。"""
+    """将字节数据编码为 URL 安全的 Base64 字符串（无 padding）。
+
+    Args:
+        data: 要编码的字节数据。
+
+    Returns:
+        URL 安全的 Base64 编码字符串，不包含 padding 字符（=）。
+
+    Example:
+        >>> url_safe_b64encode(b"hello")
+        'aGVsbG8'
+    """
     return base64.urlsafe_b64encode(data).decode("utf-8").rstrip("=")
 
 
 def kq_encode(s: str) -> str:
-    """模拟原 JS 的 kQ 函数。"""
+    """将字符串编码为 Gemini API 所需的特殊 Base64 格式。
+
+    模拟原 JavaScript 的 kQ 函数，处理双字节字符。
+    该函数将字符串转换为字节数组，其中：
+    - 单字节字符（ASCII）直接转换
+    - 双字节字符拆分为低字节和高字节
+
+    Args:
+        s: 要编码的字符串。
+
+    Returns:
+        经过特殊处理后的 URL 安全 Base64 字符串。
+    """
     byte_arr = bytearray()
     for ch in s:
         val = ord(ch)
@@ -54,7 +85,17 @@ def kq_encode(s: str) -> str:
 
 
 def decode_xsrf_token(xsrf_token: str) -> bytes:
-    """将 xsrfToken 解码为字节数组（HMAC key）。"""
+    """将 XSRF 令牌解码为字节数组，用作 HMAC 签名密钥。
+
+    Args:
+        xsrf_token: Base64 编码的 XSRF 令牌字符串。
+
+    Returns:
+        解码后的字节数组，可用于 JWT 签名。
+
+    Note:
+        会自动补齐 Base64 padding。
+    """
     padding = 4 - len(xsrf_token) % 4
     if padding != 4:
         xsrf_token += "=" * padding
@@ -67,7 +108,25 @@ def create_jwt(
     csesidx: str,
     lifetime: int = 300,
 ) -> tuple[str, float]:
-    """创建 JWT，并返回 (token, 过期时间戳)。"""
+    """创建用于 Gemini API 认证的 JWT 令牌。
+
+    使用 HMAC-SHA256 算法签名，生成符合 Gemini Business API 要求的 JWT。
+
+    Args:
+        key_bytes: HMAC 签名密钥（从 XSRF token 解码获得）。
+        key_id: 密钥 ID，包含在 JWT header 的 kid 字段中。
+        csesidx: 会话索引，用于构造 JWT 的 subject 声明。
+        lifetime: JWT 有效期（秒），默认 300 秒（5 分钟）。
+
+    Returns:
+        元组 (token, expires_at)，其中：
+        - token: 完整的 JWT 字符串
+        - expires_at: 过期时间的 Unix 时间戳
+
+    Example:
+        >>> key = decode_xsrf_token(xsrf_token)
+        >>> jwt, exp = create_jwt(key, "key123", "session456")
+    """
     now = int(time.time())
     header = {
         "alg": "HS256",
@@ -94,11 +153,22 @@ def create_jwt(
 
 
 def _build_cookie_header(config: dict) -> tuple[str, dict]:
-    """构造 Cookie 字符串，优先使用 cookie_raw，否则用拆分字段拼接。
+    """构造 HTTP Cookie 请求头字符串。
 
-    返回:
-        (cookie_str, debug_info) 元组
-        debug_info 包含 cookie_header_preview 和 cookie_header_length
+    优先使用完整的 cookie_raw，否则从拆分字段拼接。
+
+    Args:
+        config: 包含 Cookie 相关配置的字典，支持以下字段：
+            - cookie_raw: 完整的原始 Cookie 字符串（优先使用）
+            - secure_c_ses: __Secure-C_SES Cookie 值
+            - host_c_oses: __Host-C_OSES Cookie 值
+            - nid: NID Cookie 值
+
+    Returns:
+        元组 (cookie_str, debug_info)，其中：
+        - cookie_str: 构造的 Cookie 字符串
+        - debug_info: 调试信息字典，包含 cookie_source、cookie_header_length、
+          cookie_header_preview 等
     """
     cookie_raw = config.get("cookie_raw")
 
@@ -132,7 +202,14 @@ def _build_cookie_header(config: dict) -> tuple[str, dict]:
 
 
 def _parse_cookie_str(cookie_str: str) -> Dict[str, str]:
-    """将原始 Cookie 字符串解析为字典，便于 httpx CookieJar 使用。"""
+    """将原始 Cookie 字符串解析为键值对字典。
+
+    Args:
+        cookie_str: Cookie 字符串，格式如 "name1=value1; name2=value2"。
+
+    Returns:
+        Cookie 名称到值的映射字典。
+    """
     jar = SimpleCookie()
     jar.load(cookie_str)
     return {k: morsel.value for k, morsel in jar.items()}
@@ -302,7 +379,7 @@ def check_session_status(config: Optional[dict] = None) -> dict:
             try:
                 _get_jwt_via_api(config)
                 # getoxsrf 成功，说明 Cookie 有效
-                logger.info(f"list-sessions 返回 HTTP {resp.status_code}，但 getoxsrf 验证成功")
+                logger.debug(f"list-sessions 返回 HTTP {resp.status_code}，但 getoxsrf 验证成功")
                 return {
                     "valid": True,
                     "expired": False,
@@ -314,7 +391,7 @@ def check_session_status(config: Optional[dict] = None) -> dict:
                 }
             except Exception as e:
                 # getoxsrf 也失败，确认过期
-                logger.warning(f"list-sessions 返回 HTTP {resp.status_code}，getoxsrf 也失败: {e}")
+                logger.debug(f"list-sessions 返回 HTTP {resp.status_code}，getoxsrf 也失败: {e}")
                 return {
                     "valid": False,
                     "expired": True,
@@ -575,59 +652,59 @@ class JWTManager:
     _redis_manager: Optional[Any] = None  # Redis管理器实例
 
     def __post_init__(self):
-        """初始化时创建Redis管理器"""
+        """初始化时创建 Redis 管理器。"""
         try:
             from .redis_manager import get_redis_manager
             self._redis_manager = get_redis_manager(self.config)
             if self._redis_manager.is_redis_enabled():
-                logger.info("✅ JWTManager: 使用Redis存储JWT")
+                logger.info("JWTManager: 使用 Redis 存储 JWT")
             else:
-                logger.info("ℹ️ JWTManager: Redis未启用，使用内存存储JWT")
+                logger.debug("JWTManager: Redis 未启用，使用内存存储 JWT")
         except Exception as e:
-            logger.warning(f"Redis初始化失败，降级到内存存储: {e}")
+            logger.warning(f"Redis 初始化失败，降级到内存存储: {e}")
             self._redis_manager = None
 
     def _get_cached_jwt_from_redis(self) -> tuple[Optional[str], float]:
-        """从Redis获取缓存的JWT"""
+        """从 Redis 获取缓存的 JWT。"""
         if not self._redis_manager or not self._redis_manager.is_redis_enabled():
             return None, 0.0
-        
+
         try:
             jwt_data = self._redis_manager.get_json("jwt_token")
             if jwt_data and isinstance(jwt_data, dict):
                 return jwt_data.get("token"), jwt_data.get("expires_at", 0.0)
         except Exception as e:
-            logger.debug(f"从Redis读取JWT失败: {e}")
+            logger.debug(f"从 Redis 读取 JWT 失败: {e}")
         return None, 0.0
 
     def _set_cached_jwt_to_redis(self, jwt: str, expires_at: float) -> None:
-        """将JWT保存到Redis"""
+        """将 JWT 保存到 Redis。"""
         if not self._redis_manager or not self._redis_manager.is_redis_enabled():
             return
-        
+
         try:
             ttl = int(expires_at - time.time())
             if ttl > 0:
                 self._redis_manager.set_json(
                     "jwt_token",
                     {"token": jwt, "expires_at": expires_at},
-                    ex=ttl + 60  # 额外60秒容错
+                    ex=ttl + 60  # 额外 60 秒容错
                 )
         except Exception as e:
-            logger.debug(f"保存JWT到Redis失败: {e}")
+            logger.debug(f"保存 JWT 到 Redis 失败: {e}")
 
     def _clear_jwt_from_redis(self) -> None:
-        """从Redis清除JWT"""
+        """从 Redis 清除 JWT。"""
         if not self._redis_manager or not self._redis_manager.is_redis_enabled():
             return
-        
+
         try:
             self._redis_manager.delete("jwt_token")
         except Exception as e:
-            logger.debug(f"从Redis删除JWT失败: {e}")
+            logger.debug(f"从 Redis 删除 JWT 失败: {e}")
 
     def get_jwt(self) -> str:
-        """获取有效的 JWT，必要时自动刷新"""
+        """获取有效的 JWT，必要时自动刷新。"""
         now = time.time()
 
         # 优先从Redis获取（如果启用）
@@ -655,12 +732,12 @@ class JWTManager:
         return self._jwt  # type: ignore[return-value]
 
     def refresh(self) -> None:
-        """刷新 JWT"""
+        """刷新 JWT。"""
         result = _get_jwt_via_api(self.config)
         self._jwt = result["jwt"]
         self._expires_at_ts = result["expires_at_ts"]
 
-        # 更新Redis缓存
+        # 更新 Redis 缓存
         if self._redis_manager and self._redis_manager.is_redis_enabled():
             self._set_cached_jwt_to_redis(self._jwt, self._expires_at_ts)
 
@@ -671,18 +748,18 @@ class JWTManager:
         logger.debug(f"JWT 已刷新，过期时间: {datetime.fromtimestamp(self._expires_at_ts).strftime('%H:%M:%S')}")
 
     def invalidate(self) -> None:
-        """使 JWT 缓存失效（Cookie 刷新后调用）"""
+        """使 JWT 缓存失效（Cookie 刷新后调用）。"""
         self._jwt = None
         self._expires_at_ts = 0.0
-        
-        # 清除Redis缓存
+
+        # 清除 Redis 缓存
         if self._redis_manager and self._redis_manager.is_redis_enabled():
             self._clear_jwt_from_redis()
-        
+
         # 清除全局内存缓存
         if self.use_global_cache:
             clear_jwt_cache()
-        
+
         logger.debug("JWT 缓存已清除")
 
 
@@ -912,7 +989,11 @@ async def login_via_browser() -> dict:
 
 
 def ensure_biz_config(max_cookie_age_hours: int = 24) -> dict:
-    """用于 CLI / 业务代码启动时，确保 cookie + GROUP_ID 可用。"""
+    """CLI 辅助函数：确保 cookie + GROUP_ID 可用。
+
+    此函数主要用于 CLI 工具启动时的前置检查，在 Web 服务中不推荐使用。
+    Web 服务应使用 check_session_status() 或 ensure_jwt_valid() 进行实时验证。
+    """
     cfg = load_config()
     missing = [k for k in ("secure_c_ses", "csesidx", "group_id") if not cfg.get(k)]
     if missing:

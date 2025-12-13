@@ -1,8 +1,18 @@
-"""统一配置管理模块，支持 config.json、环境变量、配置迁移和热重载"""
+"""统一配置管理模块，支持 config.json、环境变量、配置迁移和热重载。
+
+该模块提供：
+- 配置文件加载和保存
+- 环境变量覆盖
+- 旧配置格式迁移
+- 配置热重载
+- 账号状态管理（JWT 缓存、Cookie 状态等）
+"""
 import json
 import logging
 import os
 import shutil
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -340,10 +350,17 @@ def cookies_age_seconds(config: dict) -> Optional[float]:
 
 
 def cookies_expired(config: dict, max_age_hours: int = 0) -> bool:
-    """判断 cookie 是否超过 max_age_hours。
+    """基于时间戳判断 cookie 是否超过 max_age_hours。
 
-    注意：此函数已废弃，建议使用 auth.check_session_status() 检查真实的 session 状态。
-    默认 max_age_hours=0 表示不进行时间检查（始终返回 False）。
+    此函数仅根据保存时间进行粗略判断，无法检测真实的 session 状态。
+    推荐使用 auth.check_session_status() 进行实时验证。
+
+    Args:
+        config: 配置字典
+        max_age_hours: 最大有效小时数，默认 0 表示不检查（始终返回 False）
+
+    Returns:
+        True 表示超时，False 表示未超时或未配置
     """
     if max_age_hours <= 0:
         return False
@@ -358,7 +375,6 @@ _config_cache = None
 _config_mtime = None
 
 # 账号状态（运行时状态，线程安全）
-import threading
 _account_state_lock = threading.RLock()
 _account_state: Dict[str, Any] = {
     "jwt": "",
@@ -418,8 +434,7 @@ def get_cached_jwt() -> tuple[Optional[str], float]:
 
 
 def set_cached_jwt(jwt: str, expires_at: float) -> None:
-    """设置缓存的 JWT"""
-    import time
+    """设置缓存的 JWT。"""
     with _account_state_lock:
         _account_state["jwt"] = jwt
         _account_state["jwt_time"] = time.time()
@@ -447,8 +462,7 @@ def mark_cookie_expired(reason: str = "") -> None:
 
 
 def mark_cookie_valid() -> None:
-    """标记 Cookie 有效（刷新成功后调用）"""
-    import time
+    """标记 Cookie 有效（刷新成功后调用）。"""
     with _account_state_lock:
         _account_state["cookie_expired"] = False
         _account_state["available"] = True
@@ -487,13 +501,12 @@ def is_cookie_expired(verify_if_expired: bool = True) -> bool:
 
 
 def _sync_cookie_state_to_redis(expired: bool, reason: str = "") -> None:
-    """将 Cookie 状态同步到 Redis（供其他 Worker 读取）"""
+    """将 Cookie 状态同步到 Redis（供其他 Worker 读取）。"""
     try:
         from .redis_manager import get_redis_manager
         config = load_config()
         redis_mgr = get_redis_manager(config)
         if redis_mgr.is_redis_enabled():
-            import time
             state = {
                 "cookie_expired": expired,
                 "reason": reason,
@@ -524,8 +537,7 @@ def _load_cookie_state_from_redis() -> Optional[bool]:
 
 
 def set_cooldown(duration_seconds: int, reason: str = "") -> None:
-    """设置账号冷却"""
-    import time
+    """设置账号冷却。"""
     with _account_state_lock:
         _account_state["cooldown_until"] = time.time() + duration_seconds
         _account_state["cooldown_reason"] = reason
@@ -534,8 +546,7 @@ def set_cooldown(duration_seconds: int, reason: str = "") -> None:
 
 
 def is_in_cooldown() -> tuple[bool, float]:
-    """检查是否在冷却中，返回 (是否冷却, 剩余秒数)"""
-    import time
+    """检查是否在冷却中，返回 (是否冷却, 剩余秒数)。"""
     with _account_state_lock:
         cooldown_until = _account_state.get("cooldown_until", 0)
         if cooldown_until > time.time():

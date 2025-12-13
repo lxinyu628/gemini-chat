@@ -1,4 +1,4 @@
-"""Session 保活服务 - 定期检查 session 状态并刷新 JWT
+"""Session 保活服务 - 定期检查 session 状态并刷新 JWT。
 
 增强功能：
 - Cookie 过期检测
@@ -63,16 +63,16 @@ class KeepAliveService:
             config = load_config()
             self._redis_manager = get_redis_manager(config)
             if self._redis_manager.is_redis_enabled():
-                logger.info("✅ KeepAliveService 已启用 Redis 状态同步")
+                logger.info("KeepAliveService: 已启用 Redis 状态同步")
         except Exception as e:
             logger.debug(f"Redis 状态同步不可用: {e}")
 
     def add_callback(self, callback: Callable) -> None:
-        """添加状态变更回调"""
+        """添加状态变更回调。"""
         self._callbacks.append(callback)
 
     def _notify(self, event: str, data: Optional[dict] = None) -> None:
-        """通知所有回调"""
+        """通知所有回调。"""
         for cb in self._callbacks:
             try:
                 cb(event, data or {})
@@ -80,18 +80,18 @@ class KeepAliveService:
                 logger.warning(f"回调执行失败: {e}")
 
     async def start(self) -> None:
-        """启动保活服务"""
+        """启动保活服务。"""
         if self._running:
-            logger.info("服务已在运行")
+            logger.debug("保活服务已在运行")
             return
 
         self._running = True
         self._task = asyncio.create_task(self._run_loop())
-        logger.info(f"服务已启动，刷新间隔: {self.interval_minutes} 分钟")
+        logger.info(f"保活服务已启动，刷新间隔: {self.interval_minutes} 分钟")
         self._notify("started", {"interval_minutes": self.interval_minutes})
 
     async def stop(self) -> None:
-        """停止保活服务"""
+        """停止保活服务。"""
         self._running = False
         if self._task:
             self._task.cancel()
@@ -100,11 +100,11 @@ class KeepAliveService:
             except asyncio.CancelledError:
                 pass
             self._task = None
-        logger.info("服务已停止")
+        logger.info("保活服务已停止")
         self._notify("stopped")
 
     async def _run_loop(self) -> None:
-        """保活循环"""
+        """保活循环。"""
         # 启动后立即执行一次刷新
         await self._do_refresh()
 
@@ -128,7 +128,7 @@ class KeepAliveService:
                 await asyncio.sleep(60)
 
     async def _do_refresh(self) -> None:
-        """执行一次刷新检查
+        """执行一次刷新检查。
 
         使用浏览器自动化完成会话状态检查和 JWT 刷新，
         避免 API 请求遇到 302 重定向到 refreshcookies 的问题。
@@ -211,7 +211,7 @@ class KeepAliveService:
                 self._notify("error", {"error": error_msg})
 
     async def _try_browser_refresh(self) -> bool:
-        """尝试通过浏览器刷新 Cookie"""
+        """尝试通过浏览器刷新 Cookie。"""
         try:
             from .browser_keep_alive import try_refresh_cookie_via_browser
 
@@ -242,12 +242,12 @@ class KeepAliveService:
             return False
 
     def trigger_refresh(self) -> None:
-        """触发一次刷新（用于外部调用，如检测到 401/403 时）"""
+        """触发一次刷新（用于外部调用，如检测到 401/403 时）。"""
         self._pending_refresh = True
-        logger.info("已触发刷新请求")
+        logger.debug("已触发刷新请求")
 
     def on_auth_error(self, status_code: int, error_msg: str = "") -> None:
-        """处理认证错误（401/403）
+        """处理认证错误（401/403）。
 
         Args:
             status_code: HTTP 状态码
@@ -267,7 +267,7 @@ class KeepAliveService:
             self._notify("rate_limited", {"error": error_msg})
 
     async def refresh_now(self) -> dict:
-        """立即执行一次刷新"""
+        """立即执行一次刷新。"""
         try:
             await self._do_refresh()
             success = (
@@ -291,10 +291,10 @@ class KeepAliveService:
             }
 
     def _sync_state_to_redis(self) -> None:
-        """将状态同步到 Redis（供其他 Worker 读取）"""
+        """将状态同步到 Redis（供其他 Worker 读取）。"""
         if not self._redis_manager or not self._redis_manager.is_redis_enabled():
             return
-        
+
         try:
             state = {
                 "last_refresh": self._last_refresh.isoformat() if self._last_refresh else None,
@@ -310,12 +310,12 @@ class KeepAliveService:
             self._redis_manager.set_json(self._redis_state_key, state, ex=600)
         except Exception as e:
             logger.debug(f"同步状态到 Redis 失败: {e}")
-    
+
     def _load_state_from_redis(self) -> Optional[dict]:
-        """从 Redis 读取共享状态"""
+        """从 Redis 读取共享状态。"""
         if not self._redis_manager or not self._redis_manager.is_redis_enabled():
             return None
-        
+
         try:
             return self._redis_manager.get_json(self._redis_state_key)
         except Exception as e:
@@ -323,8 +323,8 @@ class KeepAliveService:
             return None
 
     def get_status(self) -> dict:
-        """获取保活服务状态
-        
+        """获取保活服务状态。
+
         优先从 Redis 读取共享状态（多 Worker 一致性），
         回退到本地内存状态。
         """
@@ -373,7 +373,7 @@ def get_keep_alive_service(
     interval_minutes: int = 10,
     auto_browser_refresh: bool = False,
 ) -> KeepAliveService:
-    """获取全局保活服务实例
+    """获取全局保活服务实例。
 
     Args:
         interval_minutes: 刷新间隔（分钟）
@@ -389,6 +389,6 @@ def get_keep_alive_service(
 
 
 def notify_auth_error(status_code: int, error_msg: str = "") -> None:
-    """通知保活服务发生认证错误（供外部调用）"""
+    """通知保活服务发生认证错误（供外部调用）。"""
     service = get_keep_alive_service()
     service.on_auth_error(status_code, error_msg)

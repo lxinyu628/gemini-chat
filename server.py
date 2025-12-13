@@ -1,7 +1,16 @@
-"""FastAPI 后端服务，提供 OpenAI 兼容 API 和前端页面"""
+"""FastAPI 后端服务，提供 OpenAI 兼容 API 和前端页面。
+
+该服务提供：
+- OpenAI Chat Completions API 兼容接口
+- Anthropic Messages API 兼容接口
+- Web 管理界面
+- 会话管理和文件上传
+- 远程浏览器登录
+"""
 import asyncio
 import json
 import os
+import tempfile
 import time
 import uuid
 from datetime import datetime, timezone
@@ -18,7 +27,6 @@ from biz_gemini.auth import JWTManager, check_session_status, ensure_jwt_valid, 
 from biz_gemini.biz_client import BizGeminiClient
 from biz_gemini.config import (
     cookies_age_seconds,
-    cookies_expired,
     get_proxy,
     is_cookie_expired,
     load_config,
@@ -31,7 +39,7 @@ from biz_gemini.openai_adapter import OpenAICompatClient
 from biz_gemini.anthropic_adapter import AnthropicCompatClient
 from biz_gemini.web_login import get_login_service
 from biz_gemini.remote_browser import get_browser_service, BrowserSessionStatus
-from biz_gemini.keep_alive import get_keep_alive_service, notify_auth_error
+from biz_gemini.keep_alive import get_keep_alive_service
 from biz_gemini.browser_keep_alive import (
     get_browser_keep_alive_service,
     try_refresh_cookie_via_browser,
@@ -121,17 +129,12 @@ _is_primary_worker = False
 
 
 def _check_primary_worker() -> bool:
-    """使用分布式锁确保后台服务只启动一份（无论是否多 worker）
-    
+    """使用分布式锁确保后台服务只启动一份（无论是否多 worker）。
+
     优先使用 Redis 分布式锁（适用于多 worker 环境），
     回退到文件锁（适用于单 worker 或 Redis 不可用的情况）。
-    
     使用 PID 文件检测遗留锁，如果锁文件存在但进程已不存在，自动清理锁。
     """
-    import os
-    import tempfile
-    import time
-
     lock_file = os.path.join(tempfile.gettempdir(), "gemini_chat_browser_keep_alive.lock")
     pid_file = os.path.join(tempfile.gettempdir(), "gemini_chat_browser_keep_alive.pid")
     current_pid = os.getpid()
@@ -3069,8 +3072,6 @@ async def update_session_config(config: dict) -> dict:
                     "error": f"自动获取 csesidx 失败: {str(e)}，请手动输入"
                 }
 
-        # 添加保存时间
-        from datetime import datetime
         final_config = {
             "secure_c_ses": secure_c_ses,
             "host_c_oses": host_c_oses,

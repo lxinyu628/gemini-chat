@@ -36,7 +36,18 @@ IMAGE_SAVE_DIR = os.path.join(_PROJECT_ROOT, "biz_gemini_images")
 
 @dataclass
 class ImageThumbnail:
-    """图片缩略图信息"""
+    """图片缩略图信息。
+
+    存储从 Gemini API 返回的图片缩略图元数据。
+
+    Attributes:
+        view_id: 缩略图视图 ID。
+        uri: 缩略图访问 URI。
+        mime_type: MIME 类型，默认 "image/png"。
+        byte_size: 文件大小（字节）。
+        width: 图片宽度（像素）。
+        height: 图片高度（像素）。
+    """
     view_id: Optional[str] = None
     uri: Optional[str] = None
     mime_type: str = "image/png"
@@ -47,7 +58,27 @@ class ImageThumbnail:
 
 @dataclass
 class ChatImage:
-    """表示生成的图片"""
+    """表示 Gemini 生成或处理的图片。
+
+    可以包含 base64 编码的图片数据、远程 URL 或本地文件路径。
+    支持从 API 元数据创建和保存到本地文件。
+
+    Attributes:
+        url: 图片的远程 URL。
+        base64_data: Base64 编码的图片数据。
+        mime_type: MIME 类型，默认 "image/png"。
+        local_path: 本地保存路径。
+        file_id: Gemini API 返回的文件 ID。
+        file_name: 原始文件名。
+        byte_size: 文件大小（字节）。
+        token_count: 图片对应的 token 数量。
+        quota_percentage: 配额使用百分比。
+        download_uri: API 返回的下载 URI。
+        upload_time: 上传时间。
+        file_origin_type: 文件来源类型（AI_GENERATED 或 USER_UPLOADED）。
+        session: 关联的会话名称。
+        thumbnails: 缩略图字典，键为尺寸名称（如 "thumbnail_256x256"）。
+    """
     url: Optional[str] = None
     base64_data: Optional[str] = None
     mime_type: str = "image/png"
@@ -66,12 +97,26 @@ class ChatImage:
     thumbnails: dict = field(default_factory=dict)  # {"thumbnail_256x256": ImageThumbnail, ...}
 
     def get_thumbnail(self, size: str = "thumbnail_256x256") -> Optional[ImageThumbnail]:
-        """获取指定尺寸的缩略图"""
+        """获取指定尺寸的缩略图。
+
+        Args:
+            size: 缩略图尺寸名称，默认 "thumbnail_256x256"。
+
+        Returns:
+            对应尺寸的 ImageThumbnail 对象，如果不存在则返回 None。
+        """
         return self.thumbnails.get(size)
 
     @classmethod
     def from_file_metadata(cls, metadata: dict) -> "ChatImage":
-        """从 widgetListSessionFileMetadata 接口返回的元数据创建 ChatImage"""
+        """从 widgetListSessionFileMetadata 接口返回的元数据创建 ChatImage。
+
+        Args:
+            metadata: API 返回的文件元数据字典。
+
+        Returns:
+            包含完整元数据的 ChatImage 实例。
+        """
         # 解析缩略图
         thumbnails = {}
         views = metadata.get("views", {})
@@ -101,7 +146,21 @@ class ChatImage:
         )
 
     def save_to_file(self, directory: Optional[str] = None) -> str:
-        """保存图片到本地文件，返回文件路径"""
+        """保存图片到本地文件。
+
+        如果图片已有本地路径且文件存在，直接返回该路径。
+        支持从 base64 数据或远程 URL 保存。
+
+        Args:
+            directory: 保存目录路径。如果为 None，使用默认目录 IMAGE_SAVE_DIR。
+
+        Returns:
+            保存的文件完整路径。
+
+        Raises:
+            ValueError: 没有可用的图片数据（既无 base64 也无 URL）。
+            requests.HTTPError: 从 URL 下载失败。
+        """
         if self.local_path and os.path.exists(self.local_path):
             return self.local_path
 
@@ -145,7 +204,22 @@ class ChatImage:
         return filepath
 
     def save_with_auth(self, url: str, headers: dict, proxies: Optional[dict] = None, directory: Optional[str] = None) -> str:
-        """使用认证头下载并保存图片"""
+        """使用认证头下载并保存图片。
+
+        适用于需要 JWT 或 Cookie 认证的图片下载场景。
+
+        Args:
+            url: 图片下载 URL。
+            headers: HTTP 请求头，应包含认证信息。
+            proxies: 代理配置字典，格式如 {"http": "...", "https": "..."}。
+            directory: 保存目录路径。如果为 None，使用默认目录。
+
+        Returns:
+            保存的文件完整路径。
+
+        Raises:
+            requests.HTTPError: 下载失败。
+        """
         if self.local_path and os.path.exists(self.local_path):
             return self.local_path
 
@@ -181,13 +255,25 @@ class ChatImage:
 
 @dataclass
 class ChatResponse:
-    """聊天响应，包含文本和可能的图片"""
+    """聊天响应数据结构，包含文本、图片和思考链。
+
+    Attributes:
+        text: 响应的文本内容。
+        images: 响应中包含的图片列表。
+        thoughts: 思考链内容列表（如果启用）。
+    """
     text: str = ""
     images: List[ChatImage] = field(default_factory=list)
     thoughts: List[str] = field(default_factory=list)
 
     def __str__(self) -> str:
-        """返回纯文本表示"""
+        """返回响应的纯文本表示。
+
+        格式化输出包括思考内容（带 [思考] 前缀）、正文和图片信息。
+
+        Returns:
+            格式化的字符串表示。
+        """
         parts = []
         for thought in self.thoughts:
             parts.append(f"[思考] {thought}")
@@ -203,7 +289,16 @@ class ChatResponse:
         return "\n".join(parts)
 
 def build_headers(jwt: str) -> dict:
-    """构造与浏览器一致的请求头。"""
+    """构造符合 Gemini API 要求的 HTTP 请求头。
+
+    模拟浏览器请求头，包含必要的认证和浏览器指纹信息。
+
+    Args:
+        jwt: JWT 认证令牌。
+
+    Returns:
+        完整的 HTTP 请求头字典。
+    """
     return {
         "accept": "*/*",
         "accept-encoding": "gzip, deflate, br, zstd",
@@ -242,9 +337,34 @@ def build_headers(jwt: str) -> dict:
 
 
 class BizGeminiClient:
-    """封装 Business Gemini DiscoveryEngine 聊天调用。"""
+    """Gemini Business API 客户端。
+
+    封装 Business Gemini DiscoveryEngine 的聊天调用，提供会话管理、
+    消息发送、文件上传等功能。
+
+    Attributes:
+        config: 配置字典，包含认证和代理设置。
+        jwt_manager: JWT 管理器实例。
+        group_id: 工作区/项目组 ID。
+
+    Example:
+        >>> config = load_config()
+        >>> jwt_manager = JWTManager(config)
+        >>> client = BizGeminiClient(config, jwt_manager)
+        >>> response = client.chat("你好")
+        >>> print(response)
+    """
 
     def __init__(self, config: dict, jwt_manager: JWTManager):
+        """初始化 Gemini 客户端。
+
+        Args:
+            config: 配置字典，必须包含 group_id。
+            jwt_manager: JWT 管理器实例，用于获取认证令牌。
+
+        Raises:
+            ValueError: 缺少 group_id 配置。
+        """
         self.config = config
         self.jwt_manager = jwt_manager
         self.group_id = config.get("group_id")
@@ -286,7 +406,16 @@ class BizGeminiClient:
         return self._session_name
 
     def create_session(self) -> str:
-        """创建新会话，并返回 session name。"""
+        """创建新的聊天会话。
+
+        调用 Gemini API 创建会话，自动处理 JWT 过期重试。
+
+        Returns:
+            新创建的会话名称/ID。
+
+        Raises:
+            RuntimeError: 创建会话失败或多次重试后仍失败。
+        """
         session_id = uuid.uuid4().hex[:12]
         body = {
             "configId": self.group_id,
@@ -337,6 +466,10 @@ class BizGeminiClient:
         raise RuntimeError("多次尝试创建会话失败（可能是 cookie 失效，需要重新登录）。")
 
     def reset_session(self) -> None:
+        """重置当前会话状态。
+
+        清除实例缓存和 Redis 中的会话信息，下次访问时将创建新会话。
+        """
         self._session_name = None
         # 清除Redis缓存
         if self._redis_manager and self._redis_manager.is_redis_enabled():
@@ -344,7 +477,17 @@ class BizGeminiClient:
             self._redis_manager.delete(redis_key)
 
     def delete_session(self, session_name: str) -> bool:
-        """删除指定的会话"""
+        """删除指定的会话。
+
+        Args:
+            session_name: 要删除的会话名称/ID。
+
+        Returns:
+            删除成功返回 True。
+
+        Raises:
+            RuntimeError: 删除失败或多次重试后仍失败。
+        """
         body = {
             "configId": self.group_id,
             "additionalParams": {"token": "-"},
