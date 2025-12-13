@@ -182,54 +182,101 @@ class BrowserKeepAliveService:
             
             # 使用持久化上下文模式
             if cookie_profile_dir:
-                try:
-                    self._browser = await self._playwright.chromium.launch_persistent_context(
-                        cookie_profile_dir,
-                        headless=self.headless,
-                        channel="chrome",
-                        args=launch_args,
-                        viewport={"width": 1920, "height": 1080},
-                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                        locale="zh-CN",
-                        timezone_id="Asia/Shanghai",
-                        ignore_https_errors=True,
-                        proxy={"server": playwright_proxy} if playwright_proxy else None,
-                    )
-                    self._context = self._browser
-                    self._use_persistent_context = True
+                # 根据操作系统选择浏览器优先级
+                # Windows: 优先使用系统 Chrome（用户通常已安装）
+                # Linux: 优先使用 Playwright Chromium（服务器环境更适合）
+                import platform
+                is_windows = platform.system() == "Windows"
+                browser_order = [True, False] if is_windows else [False, True]
+                
+                for use_chrome in browser_order:
+                    try:
+                        launch_kwargs = {
+                            "headless": self.headless,
+                            "args": launch_args,
+                            "viewport": {"width": 1920, "height": 1080},
+                            "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                            "locale": "zh-CN",
+                            "timezone_id": "Asia/Shanghai",
+                            "ignore_https_errors": True,
+                        }
+                        if use_chrome:
+                            launch_kwargs["channel"] = "chrome"
+                        if playwright_proxy:
+                            launch_kwargs["proxy"] = {"server": playwright_proxy}
+                        
+                        self._browser = await self._playwright.chromium.launch_persistent_context(
+                            cookie_profile_dir,
+                            **launch_kwargs,
+                        )
+                        self._context = self._browser
+                        self._use_persistent_context = True
 
-                    await self._context.add_init_script("""
-                        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-                        Object.defineProperty(navigator, 'plugins', {
-                            get: () => [
-                                { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer' },
-                                { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai' },
-                                { name: 'Native Client', filename: 'internal-nacl-plugin' }
-                            ]
-                        });
-                        Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en'] });
-                        window.chrome = { runtime: {}, loadTimes: function() {}, csi: function() {}, app: {} };
-                    """)
+                        await self._context.add_init_script("""
+                            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+                            Object.defineProperty(navigator, 'plugins', {
+                                get: () => [
+                                    { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer' },
+                                    { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai' },
+                                    { name: 'Native Client', filename: 'internal-nacl-plugin' }
+                                ]
+                            });
+                            Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en'] });
+                            window.chrome = { runtime: {}, loadTimes: function() {}, csi: function() {}, app: {} };
+                        """)
 
-                    logger.info(f"浏览器已初始化 (持久化模式, 代理: {playwright_proxy}, 无头: {self.headless})")
-                    return True
-                except Exception as e:
-                    logger.warning(f"持久化模式启动失败 ({e})，回退到普通模式")
+                        browser_type = "Chrome" if use_chrome else "Chromium"
+                        logger.info(f"浏览器已初始化 (持久化模式, {browser_type}, 代理: {playwright_proxy}, 无头: {self.headless})")
+                        return True
+                    except Exception as e:
+                        # 第一次尝试失败，继续尝试另一个浏览器
+                        if (is_windows and use_chrome) or (not is_windows and not use_chrome):
+                            fallback_browser = "Chromium" if use_chrome else "Chrome"
+                            current_browser = "Chrome" if use_chrome else "Chromium"
+                            logger.info(f"{current_browser} 不可用 ({e})，尝试 {fallback_browser}...")
+                            continue
+                        else:
+                            logger.warning(f"持久化模式启动失败 ({e})，回退到普通模式")
+                            break
 
             self._use_persistent_context = False
 
-            try:
-                self._browser = await self._playwright.chromium.launch(
-                    headless=self.headless,
-                    channel="chrome",
-                    args=launch_args,
-                )
-            except Exception as e:
-                logger.info(f"本机 Chrome 不可用 ({e})，使用 Playwright Chromium")
-                self._browser = await self._playwright.chromium.launch(
-                    headless=self.headless,
-                    args=launch_args,
-                )
+            # 根据操作系统选择浏览器优先级
+            import platform
+            is_windows = platform.system() == "Windows"
+            
+            if is_windows:
+                # Windows: 优先使用系统 Chrome
+                try:
+                    self._browser = await self._playwright.chromium.launch(
+                        headless=self.headless,
+                        channel="chrome",
+                        args=launch_args,
+                    )
+                    logger.info("浏览器已初始化 (普通模式, Chrome)")
+                except Exception as e:
+                    logger.info(f"Chrome 不可用 ({e})，尝试 Chromium...")
+                    self._browser = await self._playwright.chromium.launch(
+                        headless=self.headless,
+                        args=launch_args,
+                    )
+                    logger.info("浏览器已初始化 (普通模式, Chromium)")
+            else:
+                # Linux: 优先使用 Playwright Chromium
+                try:
+                    self._browser = await self._playwright.chromium.launch(
+                        headless=self.headless,
+                        args=launch_args,
+                    )
+                    logger.info("浏览器已初始化 (普通模式, Chromium)")
+                except Exception as e:
+                    logger.info(f"Chromium 不可用 ({e})，尝试 Chrome...")
+                    self._browser = await self._playwright.chromium.launch(
+                        headless=self.headless,
+                        channel="chrome",
+                        args=launch_args,
+                    )
+                    logger.info("浏览器已初始化 (普通模式, Chrome)")
 
             context_kwargs = {
                 "viewport": {"width": 1920, "height": 1080},
