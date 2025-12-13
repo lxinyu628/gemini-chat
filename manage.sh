@@ -135,6 +135,7 @@ except:
             --log-level "${LOG_LEVEL,,}" \
             --access-logfile "$ACCESS_LOG" \
             --error-logfile "$ERROR_LOG" \
+            --capture-output \
             --pid "$PID_FILE" \
             --daemon
     else
