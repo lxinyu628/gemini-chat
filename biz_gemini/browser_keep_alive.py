@@ -667,7 +667,14 @@ class BrowserKeepAliveService:
                 finally:
                     await getoxsrf_page.close()
 
-                cookies = await self._context.cookies()
+                # 显式指定要获取的域，确保包含 auth 域的 cookies
+                # 这是因为持久化模式下，只访问过的域的 cookies 才会被加载到内存
+                target_urls = [
+                    "https://auth.business.gemini.google/",
+                    "https://business.gemini.google/",
+                ]
+                cookies = await self._context.cookies(target_urls)
+                logger.debug(f"[浏览器保活] 提取到 {len(cookies)} 个 cookies")
                 new_config = self._extract_cookies(cookies, current_url)
 
                 if new_config:
