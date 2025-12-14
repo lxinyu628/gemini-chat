@@ -678,6 +678,55 @@ class BrowserKeepAliveService:
                 new_config = self._extract_cookies(cookies, current_url)
 
                 if new_config:
+                    # 关键：通过 list-sessions API 获取最新的 csesidx
+                    # 避免使用旧的 csesidx 导致 403 "Session is not owned by the provided user" 错误
+                    try:
+                        list_sessions_page = await self._context.new_page()
+                        try:
+                            result = await list_sessions_page.evaluate("""
+                                async () => {
+                                    try {
+                                        const resp = await fetch('https://auth.business.gemini.google/list-sessions?rt=json', {
+                                            credentials: 'include'
+                                        });
+                                        const text = await resp.text();
+                                        return { ok: resp.ok, status: resp.status, text: text };
+                                    } catch (e) {
+                                        return { error: e.message };
+                                    }
+                                }
+                            """)
+
+                            if result.get("ok"):
+                                import json as json_module
+                                text = result.get("text", "")
+                                # 解析 JSON（可能有前缀）
+                                if ")]}'\n" in text:
+                                    text = text.split(")]}'\n", 1)[1]
+                                elif ")]}'\\n" in text:
+                                    text = text.split(")]}'\\n", 1)[1]
+                                elif ")]}\'" in text:
+                                    text = text.split(")]}'", 1)[1]
+                                try:
+                                    data = json_module.loads(text.strip())
+                                    sessions = data.get("sessions", [])
+                                    if sessions:
+                                        new_csesidx = str(sessions[0].get("csesidx", ""))
+                                        old_csesidx = config.get("csesidx")
+                                        if new_csesidx and new_csesidx != old_csesidx:
+                                            logger.info(f"[浏览器保活] 从 list-sessions 更新 csesidx: {old_csesidx} -> {new_csesidx}")
+                                            new_config["csesidx"] = new_csesidx
+                                        elif new_csesidx:
+                                            logger.debug(f"[浏览器保活] list-sessions 确认 csesidx: {new_csesidx}")
+                                except json_module.JSONDecodeError as e:
+                                    logger.warning(f"[浏览器保活] 解析 list-sessions 响应失败: {e}")
+                            else:
+                                logger.debug(f"[浏览器保活] list-sessions 请求失败: status={result.get('status')}")
+                        finally:
+                            await list_sessions_page.close()
+                    except Exception as e:
+                        logger.warning(f"[浏览器保活] 获取 list-sessions 失败: {e}")
+
                     save_config(new_config)
                     on_cookie_refreshed()
 

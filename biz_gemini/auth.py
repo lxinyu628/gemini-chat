@@ -292,6 +292,10 @@ def check_session_status(config: Optional[dict] = None) -> dict:
             status = raw_response.get("status") if isinstance(raw_response, dict) else None
             host_c_oses = config.get("host_c_oses")
             if status == "INVALID_COOKIES":
+                # INVALID_COOKIES 表示 __Host-C_OSES 已损坏，需要清除 session 缓存
+                # 避免后续请求使用旧的 session 导致 403 "Session is not owned by the provided user"
+                logger.warning(f"检测到 INVALID_COOKIES，清除 session 缓存以避免 403 错误")
+                clear_redis_session_cache()
                 try:
                     _get_jwt_via_api(config)
                     error_msg = raw_response.get("message", "Cookies 无效")

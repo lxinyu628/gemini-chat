@@ -425,7 +425,7 @@ class BizGeminiClient:
             },
         }
 
-        for attempt in range(2):
+        for attempt in range(3):
             jwt = self.jwt_manager.get_jwt()
             resp = requests.post(
                 CREATE_SESSION_URL,
@@ -436,9 +436,15 @@ class BizGeminiClient:
                 timeout=30,
             )
 
-            if resp.status_code == 401 and attempt == 0:
-                # JWT 过期，刷新后重试一次
+            if resp.status_code == 401 and attempt < 2:
+                # JWT 过期，刷新后重试
                 self.jwt_manager.refresh()
+                continue
+
+            # 403 错误可能是 JWT 基于旧的 csesidx 生成，使 JWT 缓存失效后重试
+            if resp.status_code == 403 and attempt < 2:
+                logger.warning("创建会话返回 403，可能是 csesidx 不匹配，尝试刷新 JWT")
+                self.jwt_manager.invalidate()
                 continue
 
             if resp.status_code != 200:
@@ -837,6 +843,16 @@ class BizGeminiClient:
             # session 失效，重建 session 后重试一次
             if resp.status_code == 404 and attempt == 0:
                 self.reset_session()
+                session = self.session_name
+                continue
+
+            # 403 错误可能是 session 归属问题（csesidx 变化后旧 session 不属于当前用户）
+            # 清除 session 缓存并重试
+            if resp.status_code == 403 and attempt == 0:
+                logger.warning(f"widgetStreamAssist 返回 403，可能是 session 归属问题，尝试重建 session")
+                self.reset_session()
+                # 同时使 JWT 缓存失效，确保使用最新的 csesidx 生成 JWT
+                self.jwt_manager.invalidate()
                 session = self.session_name
                 continue
 
