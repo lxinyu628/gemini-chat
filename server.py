@@ -563,7 +563,7 @@ async def index() -> HTMLResponse:
 
 @app.get("/api/status")
 async def get_status() -> dict:
-    """获取登录状态（通过 list-sessions 检查真实的 session 状态）"""
+    """获取登录状态（通过 getoxsrf 检查真实的 session 状态）"""
     try:
         config = load_config()
         account_chooser_url = _build_account_chooser_url(config)
@@ -701,140 +701,6 @@ async def get_status() -> dict:
             "logged_in": False,
             "error": str(e),
             "account_chooser_url": None,
-        }
-
-
-@app.get("/api/debug/session-status")
-async def debug_session_status() -> dict:
-    """调试端点：查看 list-sessions 原始返回
-
-    返回信息包括：
-    - cookie_lengths: 各 cookie 的长度，帮助确认 cookie 是否完整
-    - cookie_header_preview: 实际使用的 cookie header 预览（前100字符）
-    - cookie_header_length: 实际使用的 cookie header 长度
-    - cookie_source: cookie 来源（cookie_raw 或 fields）
-    - cookies_saved_at: cookie 保存时间
-    - cookie_profile_dir: cookie 来源的浏览器用户数据目录（如果有）
-    - 多账号检测提示
-    """
-    import httpx
-    from biz_gemini.auth import _build_cookie_header
-
-    config = load_config()
-    secure_c_ses = config.get("secure_c_ses")
-    host_c_oses = config.get("host_c_oses")
-    nid = config.get("nid")
-    csesidx = config.get("csesidx")
-    cookie_raw = config.get("cookie_raw")
-
-    # Cookie 长度信息（帮助确认 cookie 是否完整）
-    cookie_lengths = {
-        "secure_c_ses_len": len(secure_c_ses) if secure_c_ses else 0,
-        "host_c_oses_len": len(host_c_oses) if host_c_oses else 0,
-        "nid_len": len(nid) if nid else 0,
-        "cookie_raw_len": len(cookie_raw) if cookie_raw else 0,
-    }
-
-    # Cookie 保存时间和来源目录
-    cookies_saved_at = config.get("cookies_saved_at")
-    cookie_profile_dir = config.get("cookie_profile_dir")
-
-    if not secure_c_ses or not csesidx:
-        return {
-            "error": "缺少凭证",
-            "cookie_lengths": cookie_lengths,
-            "cookies_saved_at": cookies_saved_at,
-            "cookie_profile_dir": cookie_profile_dir,
-        }
-
-    # 使用 _build_cookie_header 获取实际使用的 cookie 和调试信息
-    cookie_str, cookie_debug = _build_cookie_header(config)
-
-    url = f"https://auth.business.gemini.google/list-sessions?csesidx={csesidx}&rt=json"
-    proxy = get_proxy(config)
-
-    try:
-        client_kwargs = {"verify": False, "timeout": 30.0}
-        if proxy:
-            client_kwargs["proxy"] = proxy
-
-        with httpx.Client(**client_kwargs) as client:
-            resp = client.get(
-                url,
-                headers={
-                    "accept": "*/*",
-                    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "origin": "https://business.gemini.google",
-                    "referer": "https://business.gemini.google/",
-                    "sec-fetch-dest": "empty",
-                    "sec-fetch-mode": "cors",
-                    "sec-fetch-site": "same-site",
-                    "cookie": cookie_str,
-                },
-            )
-
-        text = resp.text
-        raw_text = text[:500]  # 保存原始文本前500字符用于调试
-        if text.startswith(")]}'"):
-            text = text[4:].strip()
-
-        data = json.loads(text)
-
-        # 检查 session 状态
-        sessions_list = data.get("sessions", [])
-        matched_session = None
-        csesidx_str = str(csesidx)
-        for sess in sessions_list:
-            if str(sess.get("csesidx", "")) == csesidx_str:
-                matched_session = sess
-                break
-
-        # 多账号检测
-        multi_account_warning = None
-        if len(sessions_list) > 1:
-            # 检查是否有多个不同的 csesidx
-            unique_csesidx = set(str(sess.get("csesidx", "")) for sess in sessions_list)
-            if len(unique_csesidx) > 1:
-                multi_account_warning = "检测到多账号 cookie，建议清空浏览器数据后重新登录"
-                logger.warning(f"检测到多账号 cookie: {unique_csesidx}")
-
-        result = {
-            "http_status": resp.status_code,
-            "proxy_used": proxy,
-            "csesidx_in_config": csesidx,
-            "csesidx_type": type(csesidx).__name__,
-            "raw_text_preview": raw_text,
-            "raw_response": data,
-            "sessions_count": len(sessions_list),
-            "matched_session": matched_session,
-            "first_session_csesidx": sessions_list[0].get("csesidx") if sessions_list else None,
-            "first_session_csesidx_type": type(sessions_list[0].get("csesidx")).__name__ if sessions_list else None,
-            "check_result": check_session_status(config),
-            # Cookie 调试字段
-            "cookie_lengths": cookie_lengths,
-            "cookies_saved_at": cookies_saved_at,
-            "cookie_profile_dir": cookie_profile_dir,
-            # 新增：实际使用的 cookie header 信息
-            "cookie_header_preview": cookie_debug.get("cookie_header_preview"),
-            "cookie_header_length": cookie_debug.get("cookie_header_length"),
-            "cookie_source": cookie_debug.get("cookie_source"),
-        }
-
-        if multi_account_warning:
-            result["multi_account_warning"] = multi_account_warning
-
-        return result
-    except Exception as e:
-        import traceback
-        return {
-            "error": str(e),
-            "traceback": traceback.format_exc(),
-            "cookie_lengths": cookie_lengths,
-            "cookies_saved_at": cookies_saved_at,
-            "cookie_profile_dir": cookie_profile_dir,
-            "cookie_header_preview": cookie_debug.get("cookie_header_preview") if 'cookie_debug' in dir() else None,
-            "cookie_header_length": cookie_debug.get("cookie_header_length") if 'cookie_debug' in dir() else None,
-            "cookie_source": cookie_debug.get("cookie_source") if 'cookie_debug' in dir() else None,
         }
 
 
@@ -2992,13 +2858,13 @@ async def browser_status() -> dict:
 async def update_session_config(config: dict) -> dict:
     """手动更新登录配置（用于手动粘贴 Cookie）
 
-    只需要提供 secure_c_ses 和 group_id，csesidx 会自动获取
+    需要提供 secure_c_ses, group_id 和 csesidx
     """
     import httpx
 
     try:
-        # 只需要 secure_c_ses 和 group_id
-        required_fields = ["secure_c_ses", "group_id"]
+        # 需要 secure_c_ses, group_id 和 csesidx
+        required_fields = ["secure_c_ses", "group_id", "csesidx"]
         missing = [f for f in required_fields if not config.get(f)]
 
         if missing:
@@ -3010,67 +2876,52 @@ async def update_session_config(config: dict) -> dict:
         secure_c_ses = config.get("secure_c_ses")
         host_c_oses = config.get("host_c_oses", "")
         nid = config.get("nid", "")
-
-        # 如果没有提供 csesidx，自动从 list-sessions 获取
         csesidx = config.get("csesidx", "")
-        if not csesidx:
-            # 构造 cookie 字符串
-            cookie_str = f"__Secure-C_SES={secure_c_ses}"
-            if host_c_oses:
-                cookie_str += f"; __Host-C_OSES={host_c_oses}"
-            if nid:
-                cookie_str += f"; NID={nid}"
 
-            # 调用 list-sessions API 获取 csesidx
-            proxy = get_proxy(load_config())
-            client_kwargs = {"verify": False, "timeout": 30.0}
-            if proxy:
-                client_kwargs["proxy"] = proxy
+        # 使用 getoxsrf 验证 Cookie 是否有效
+        cookie_str = f"__Secure-C_SES={secure_c_ses}"
+        if host_c_oses:
+            cookie_str += f"; __Host-C_OSES={host_c_oses}"
+        if nid:
+            cookie_str += f"; NID={nid}"
 
-            try:
-                async with httpx.AsyncClient(**client_kwargs) as client:
-                    # 先尝试不带 csesidx 参数
-                    resp = await client.get(
-                        "https://auth.business.gemini.google/list-sessions?rt=json",
-                        headers={
-                            "accept": "*/*",
-                            "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                            "origin": "https://business.gemini.google",
-                            "referer": "https://business.gemini.google/",
-                            "cookie": cookie_str,
-                        },
-                    )
+        proxy = get_proxy(load_config())
+        client_kwargs = {"verify": False, "timeout": 30.0, "follow_redirects": False}
+        if proxy:
+            client_kwargs["proxy"] = proxy
 
-                    if resp.status_code == 200:
-                        text = resp.text
-                        if text.startswith(")]}'"):
-                            text = text[4:].strip()
+        try:
+            async with httpx.AsyncClient(**client_kwargs) as client:
+                resp = await client.post(
+                    f"https://business.gemini.google/auth/getoxsrf?csesidx={csesidx}",
+                    headers={
+                        "accept": "*/*",
+                        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                        "origin": "https://business.gemini.google",
+                        "referer": "https://business.gemini.google/",
+                        "cookie": cookie_str,
+                    },
+                )
 
-                        data = json.loads(text)
-                        sessions_list = data.get("sessions", [])
+                if resp.status_code == 200:
+                    # Cookie 有效
+                    pass
+                elif resp.status_code == 302:
+                    return {
+                        "success": False,
+                        "error": "Cookie 已过期或无效，请重新登录"
+                    }
+                else:
+                    return {
+                        "success": False,
+                        "error": f"验证凭证失败: HTTP {resp.status_code}，请检查 Cookie 是否正确"
+                    }
 
-                        if sessions_list:
-                            # 使用第一个（通常是当前活跃的）session 的 csesidx
-                            csesidx = str(sessions_list[0].get("csesidx", ""))
-                            # 同时尝试获取 NID（如果响应头中有 Set-Cookie）
-                            # 注意：NID 通常不在 list-sessions 响应中
-
-                        if not csesidx:
-                            return {
-                                "success": False,
-                                "error": "无法自动获取 csesidx，请手动输入"
-                            }
-                    else:
-                        return {
-                            "success": False,
-                            "error": f"验证凭证失败: HTTP {resp.status_code}，请检查 Cookie 是否正确"
-                        }
-
-            except Exception as e:
-                return {
-                    "success": False,
-                    "error": f"自动获取 csesidx 失败: {str(e)}，请手动输入"
-                }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"验证凭证失败: {str(e)}"
+            }
 
         final_config = {
             "secure_c_ses": secure_c_ses,

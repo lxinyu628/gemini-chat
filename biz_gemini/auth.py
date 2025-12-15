@@ -40,7 +40,6 @@ from .logger import get_logger
 logger = get_logger("auth")
 
 GETOXSRF_URL = "https://business.gemini.google/auth/getoxsrf"
-LIST_SESSIONS_URL = "https://auth.business.gemini.google/list-sessions"
 
 
 def url_safe_b64encode(data: bytes) -> str:
@@ -216,14 +215,14 @@ def _parse_cookie_str(cookie_str: str) -> Dict[str, str]:
 
 
 def check_session_status(config: Optional[dict] = None) -> dict:
-    """通过 list-sessions 接口检查 session 是否过期。
+    """通过 getoxsrf 接口检查 session 是否有效。
 
     返回:
         {
             "valid": bool,          # session 是否有效
             "expired": bool,        # session 是否已过期
-            "warning": bool,        # 是否有警告（如 Cookie 无效但不一定过期）
-            "username": str,        # 用户名/邮箱
+            "warning": bool,        # 是否有警告
+            "username": str,        # 用户名/邮箱（getoxsrf 不返回此信息，始终为 None）
             "error": str | None,    # 错误信息
             "raw_response": dict,   # 原始响应（用于调试）
             "cookie_debug": dict,   # cookie 调试信息
@@ -246,230 +245,44 @@ def check_session_status(config: Optional[dict] = None) -> dict:
             "cookie_debug": None,
         }
 
-    proxy = get_proxy(config)
-
     # 构造 Cookie 字符串，优先使用 cookie_raw
     cookie_str, cookie_debug = _build_cookie_header(config)
 
-    url = f"{LIST_SESSIONS_URL}?csesidx={csesidx}&rt=json"
-
-    client_kwargs = {
-        "verify": False,
-        "follow_redirects": False,
-        "timeout": 30.0,
-    }
-    if proxy:
-        client_kwargs["proxy"] = proxy
-
     try:
-        with httpx.Client(**client_kwargs) as client:
-            resp = client.get(
-                url,
-                headers={
-                    "accept": "*/*",
-                    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "origin": "https://business.gemini.google",
-                    "referer": "https://business.gemini.google/",
-                    "sec-fetch-dest": "empty",
-                    "sec-fetch-mode": "cors",
-                    "sec-fetch-site": "same-site",
-                    "cookie": cookie_str,
-                },
-            )
-
-        # 如果 list-sessions 返回 401，检查响应内容
-        if resp.status_code == 401:
-            # 尝试解析响应内容，检查是否是 INVALID_COOKIES
-            raw_response = None
-            try:
-                text = resp.text
-                if text.startswith(")]}'"):
-                    text = text[4:].strip()
-                raw_response = json.loads(text) if text else {}
-            except Exception:
-                raw_response = {"raw_text": resp.text[:500]}
-
-            status = raw_response.get("status") if isinstance(raw_response, dict) else None
-            host_c_oses = config.get("host_c_oses")
-            if status == "INVALID_COOKIES":
-                # INVALID_COOKIES 表示 __Host-C_OSES 已损坏，需要清除 session 缓存
-                # 避免后续请求使用旧的 session 导致 403 "Session is not owned by the provided user"
-                logger.warning(f"检测到 INVALID_COOKIES，清除 session 缓存以避免 403 错误")
-                clear_redis_session_cache()
-                try:
-                    _get_jwt_via_api(config)
-                    error_msg = raw_response.get("message", "Cookies 无效")
-                    return {
-                        "valid": True,
-                        "expired": False,
-                        "warning": True,
-                        "username": None,
-                        "error": f"list-sessions 失败但 getoxsrf 可用 ({error_msg})",
-                        "raw_response": raw_response,
-                        "cookie_debug": cookie_debug,
-                    }
-                except Exception as getoxsrf_err:
-                    try:
-                        from .biz_client import BizGeminiClient
-                        jwt_manager = JWTManager(config=config)
-                        biz_client = BizGeminiClient(config, jwt_manager)
-                        biz_client.list_sessions(page_size=1)
-                        missing_cookie_hint = "缺少 __Host-C_OSES" if not host_c_oses else "Cookies 无效"
-                        return {
-                            "valid": True,
-                            "expired": False,
-                            "warning": True,
-                            "username": None,
-                            "error": f"list-sessions 失败但 JWT 路径可用 ({missing_cookie_hint})",
-                            "raw_response": raw_response,
-                            "cookie_debug": cookie_debug,
-                        }
-                    except Exception as jwt_err:
-                        missing_cookie_hint = "缺少 __Host-C_OSES" if not host_c_oses else "Cookies 无效"
-                        return {
-                            "valid": False,
-                            "expired": False,
-                            "warning": True,
-                            "username": None,
-                            "error": f"Cookies 无效或缺失 ({missing_cookie_hint}), getoxsrf 失败: {getoxsrf_err}, JWT 路径也失败: {jwt_err}",
-                            "raw_response": raw_response,
-                            "cookie_debug": cookie_debug,
-                        }
-
-            # 尝试通过 getoxsrf 验证 session 是否有效
-            try:
-                _get_jwt_via_api(config)
-                # 如果 getoxsrf 成功，说明 session 有效
-                return {
-                    "valid": True,
-                    "expired": False,
-                    "warning": False,
-                    "username": None,
-                    "error": None,
-                    "raw_response": raw_response,
-                    "cookie_debug": cookie_debug,
-                }
-            except Exception:
-                # getoxsrf 失败，再尝试 JWT 路径回退
-                try:
-                    from .biz_client import BizGeminiClient
-                    jwt_manager = JWTManager(config=config)
-                    biz_client = BizGeminiClient(config, jwt_manager)
-                    biz_client.list_sessions(page_size=1)
-                    # JWT 路径成功
-                    return {
-                        "valid": True,
-                        "expired": False,
-                        "warning": True,
-                        "username": None,
-                        "error": "list-sessions 返回 401 但 JWT 路径可用",
-                        "raw_response": raw_response,
-                        "cookie_debug": cookie_debug,
-                    }
-                except Exception:
-                    return {
-                        "valid": False,
-                        "expired": True,
-                        "warning": False,
-                        "username": None,
-                        "error": "HTTP 401",
-                        "raw_response": raw_response,
-                        "cookie_debug": cookie_debug,
-                    }
-
-        if resp.status_code != 200:
-            # 非 200 状态，尝试 getoxsrf 回退验证
-            # 因为 list-sessions 有时返回错误但 Cookie 仍然有效
-            try:
-                _get_jwt_via_api(config)
-                # getoxsrf 成功，说明 Cookie 有效
-                logger.debug(f"list-sessions 返回 HTTP {resp.status_code}，但 getoxsrf 验证成功")
-                return {
-                    "valid": True,
-                    "expired": False,
-                    "warning": True,
-                    "username": None,
-                    "error": f"list-sessions 返回 HTTP {resp.status_code}，但 getoxsrf 验证成功",
-                    "raw_response": None,
-                    "cookie_debug": cookie_debug,
-                }
-            except Exception as e:
-                # getoxsrf 也失败，确认过期
-                logger.debug(f"list-sessions 返回 HTTP {resp.status_code}，getoxsrf 也失败: {e}")
-                return {
-                    "valid": False,
-                    "expired": True,
-                    "warning": False,
-                    "username": None,
-                    "error": f"HTTP {resp.status_code}",
-                    "raw_response": None,
-                    "cookie_debug": cookie_debug,
-                }
-
-        text = resp.text
-        # 处理可能的前缀
-        if text.startswith(")]}'"):
-            text = text[4:].strip()
-
-        data = json.loads(text)
-        sessions = data.get("sessions", [])
-
-        # 查找当前 session（注意：csesidx 可能是字符串或数字，统一转为字符串比较）
-        current_session = None
-        csesidx_str = str(csesidx)
-        for sess in sessions:
-            if str(sess.get("csesidx", "")) == csesidx_str:
-                current_session = sess
-                break
-
-        if not current_session and sessions:
-            # 如果没找到匹配的，使用第一个（通常只有一个登录 session）
-            current_session = sessions[0]
-
-        if current_session:
-            is_expired = current_session.get("expired", False)
-            # 优先取 username，若为空则取 subject，最后取 displayName
-            username = current_session.get("username") or current_session.get("subject") or current_session.get("displayName")
-            return {
-                "valid": not is_expired,
-                "expired": is_expired,
-                "warning": False,
-                "username": username,
-                "signout_url": current_session.get("singleSessionSignoutUrl"),
-                "error": None,
-                "raw_response": data,
-                "cookie_debug": cookie_debug,
-            }
-
+        # 使用 getoxsrf 验证 session 是否有效
+        result = _get_jwt_via_api(config)
+        # 如果成功获取 JWT，说明 session 有效
         return {
-            "valid": False,
-            "expired": True,
+            "valid": True,
+            "expired": False,
             "warning": False,
             "username": None,
-            "error": "未找到 session 信息",
-            "raw_response": data,
+            "error": None,
+            "raw_response": {"keyId": result.get("key_id", "")[:20] + "..."},
             "cookie_debug": cookie_debug,
         }
-
-    except json.JSONDecodeError as e:
-        return {
-            "valid": False,
-            "expired": True,
-            "warning": False,
-            "username": None,
-            "error": f"JSON 解析失败: {e}",
-            "raw_response": None,
-            "cookie_debug": cookie_debug if 'cookie_debug' in dir() else None,
-        }
     except Exception as e:
+        error_msg = str(e)
+        # 检查是否是 302 重定向到 refreshcookies（可能需要刷新 Cookie）
+        if "302" in error_msg or "refreshcookies" in error_msg.lower():
+            return {
+                "valid": False,
+                "expired": False,
+                "warning": True,
+                "username": None,
+                "error": f"需要刷新 Cookie: {error_msg}",
+                "raw_response": None,
+                "cookie_debug": cookie_debug,
+            }
+        # 其他错误视为 session 过期
         return {
             "valid": False,
             "expired": True,
             "warning": False,
             "username": None,
-            "error": str(e),
+            "error": error_msg,
             "raw_response": None,
-            "cookie_debug": cookie_debug if 'cookie_debug' in dir() else None,
+            "cookie_debug": cookie_debug,
         }
 
 

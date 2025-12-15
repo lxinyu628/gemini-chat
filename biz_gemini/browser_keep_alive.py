@@ -1565,7 +1565,7 @@ async def refresh_session_via_browser(context, config: dict) -> dict:
 async def check_session_via_browser(context, config: dict) -> dict:
     """通过浏览器检查会话状态
 
-    在浏览器环境中执行 list-sessions 请求。
+    检查访问主页是否被重定向到登录页来判断 Cookie 是否有效。
 
     Args:
         context: Playwright 上下文对象
@@ -1595,61 +1595,14 @@ async def check_session_via_browser(context, config: dict) -> dict:
             logger.info("[浏览器保活] Cookie 已过期，需要重新登录")
             return {"valid": False, "expired": True, "username": None, "error": "Cookie 已过期"}
 
-        list_sessions_url = f"https://auth.business.gemini.google/list-sessions?csesidx={csesidx}&rt=json"
-        logger.info(f"[浏览器保活] 在浏览器中请求 list-sessions...")
-
-        result = await page.evaluate(f"""
-            async () => {{
-                try {{
-                    const resp = await fetch('{list_sessions_url}', {{
-                        credentials: 'include'
-                    }});
-                    const text = await resp.text();
-                    return {{ ok: resp.ok, status: resp.status, text: text }};
-                }} catch (e) {{
-                    return {{ error: e.message }};
-                }}
-            }}
-        """)
-
-        if result.get("error"):
-            return {"valid": False, "expired": True, "username": None, "error": result["error"]}
-
-        if not result.get("ok"):
-            return {"valid": False, "expired": True, "username": None, "error": f"HTTP {result.get('status')}"}
-
-        text = result.get("text", "")
-        if text.startswith(")]}'"):
-            text = text[4:].strip()
-
-        import json
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError:
-            return {"valid": False, "expired": True, "username": None, "error": "JSON 解析失败"}
-
-        sessions = data.get("sessions", [])
-        csesidx_str = str(csesidx)
-        current_session = None
-        for sess in sessions:
-            if str(sess.get("csesidx", "")) == csesidx_str:
-                current_session = sess
-                break
-
-        if not current_session and sessions:
-            current_session = sessions[0]
-
-        if current_session:
-            is_expired = current_session.get("expired", False)
-            username = current_session.get("username") or current_session.get("subject") or current_session.get("displayName")
-            return {
-                "valid": not is_expired,
-                "expired": is_expired,
-                "username": username,
-                "error": None,
-            }
-
-        return {"valid": False, "expired": True, "username": None, "error": "未找到 session"}
+        # 如果没有被重定向到登录页，说明 Cookie 有效
+        logger.info("[浏览器保活] 会话检查通过，Cookie 有效")
+        return {
+            "valid": True,
+            "expired": False,
+            "username": None,
+            "error": None,
+        }
 
     except Exception as e:
         logger.error(f"[浏览器保活] 检查会话状态失败: {e}")
@@ -1838,48 +1791,6 @@ async def _extract_and_save_cookies(context, current_url: str, captured_csesidx:
                         if new_csesidx != csesidx:
                             logger.info(f"[自动登录] 从 URL 更新 csesidx: {csesidx} -> {new_csesidx}")
                             csesidx = new_csesidx
-
-                    # 关键：通过 list-sessions API 获取最新的 csesidx（在浏览器中执行，Cookie 已激活）
-                    logger.info("[自动登录] 通过 list-sessions 获取最新 csesidx...")
-                    try:
-                        result = await page.evaluate("""
-                            async () => {
-                                try {
-                                    const resp = await fetch('https://auth.business.gemini.google/list-sessions?rt=json', {
-                                        credentials: 'include'
-                                    });
-                                    const text = await resp.text();
-                                    return { ok: resp.ok, status: resp.status, text: text };
-                                } catch (e) {
-                                    return { error: e.message };
-                                }
-                            }
-                        """)
-
-                        if result.get("ok"):
-                            text = result.get("text", "")
-                            import json
-                            # 解析 JSON（可能有前缀）
-                            if ")]}'\\n" in text:
-                                text = text.split(")]}'\\n", 1)[1]
-                            elif ")]}'" in text:
-                                text = text.split(")]}'", 1)[1]
-                            try:
-                                data = json.loads(text.strip())
-                                sessions = data.get("sessions", [])
-                                if sessions:
-                                    new_csesidx = str(sessions[0].get("csesidx", ""))
-                                    if new_csesidx and new_csesidx != csesidx:
-                                        logger.info(f"[自动登录] 从 list-sessions 更新 csesidx: {csesidx} -> {new_csesidx}")
-                                        csesidx = new_csesidx
-                                    else:
-                                        logger.info(f"[自动登录] list-sessions 确认 csesidx: {csesidx}")
-                            except json.JSONDecodeError as e:
-                                logger.warning(f"[自动登录] 解析 list-sessions 响应失败: {e}")
-                        else:
-                            logger.debug(f"[自动登录] list-sessions 请求失败: status={result.get('status')}")
-                    except Exception as e:
-                        logger.warning(f"[自动登录] 获取 list-sessions 失败: {e}")
 
                     logger.info("[自动登录] Cookie 激活完成")
                 finally:
