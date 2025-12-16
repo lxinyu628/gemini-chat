@@ -24,14 +24,13 @@ LOGIN_HOSTS = [
     "accountverification.business.gemini.google",
 ]
 # 验证码页面特征（Google 验证码页面可能的 URL 模式）
+# 注意：不要包含普通登录页的 URL，否则会与 _is_login_page 冲突
 VERIFICATION_INDICATORS = [
     "accountverification.business.gemini.google",
-    "challenge/",
+    "challenge/",  # 验证码挑战页面
     "/signin/v2/challenge",
     "/v3/signin/challenge",
     "signin/challenge",
-    "accounts.google.com/v3/signin",
-    "accounts.google.com/signin",
     "interstitialreturn",  # Google 中间页
 ]
 
@@ -1144,6 +1143,10 @@ async def _auto_login_flow(page, context, config: dict) -> dict:
 
         page.on("framenavigated", on_frame_navigated)
 
+        # 输出初始 URL 状态
+        initial_url = page.url
+        logger.info(f"[自动登录] 开始自动登录流程，初始 URL: {initial_url}")
+
         loop_count = 0
         while asyncio.get_event_loop().time() - start_time < max_wait_seconds:
             loop_count += 1
@@ -1164,7 +1167,9 @@ async def _auto_login_flow(page, context, config: dict) -> dict:
 
             # 每30次循环输出一次日志，避免刷屏
             if loop_count % 30 == 1:
-                logger.debug(f"[自动登录] 等待中... (已等待 {int((asyncio.get_event_loop().time() - start_time))}秒)")
+                elapsed = int(asyncio.get_event_loop().time() - start_time)
+                logger.info(f"[自动登录] 等待中... (已等待 {elapsed}秒, URL: {current_url[:100]})")
+                logger.info(f"[自动登录]   状态: is_main={is_main}, is_verif={is_verif}, is_login={is_login}, email_handled={email_input_handled}, verif_handled={verification_handled}")
 
             # 检查是否已到达主页（登录成功）
             if _is_main_page(current_url):
@@ -1229,6 +1234,14 @@ async def _auto_login_flow(page, context, config: dict) -> dict:
             page.remove_listener("framenavigated", on_frame_navigated)
         except Exception:
             pass
+
+        # 输出超时诊断信息
+        final_url = page.url
+        logger.warning(f"[自动登录] 超时！最终 URL: {final_url}")
+        logger.warning(f"[自动登录] 经过的 URL 数量: {len(all_navigated_urls)}")
+        if all_navigated_urls:
+            logger.warning(f"[自动登录] 最后 5 个 URL: {all_navigated_urls[-5:]}")
+
         return {
             "success": False,
             "message": "自动登录超时（3分钟）",
