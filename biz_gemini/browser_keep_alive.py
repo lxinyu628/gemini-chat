@@ -1165,11 +1165,13 @@ async def _auto_login_flow(page, context, config: dict) -> dict:
             is_verif = _is_verification_page(current_url)
             is_login = _is_login_page(current_url)
 
-            # 每30次循环输出一次日志，避免刷屏
-            if loop_count % 30 == 1:
+            # 第一次循环和每30次循环输出日志
+            if loop_count == 1 or loop_count % 30 == 0:
                 elapsed = int(asyncio.get_event_loop().time() - start_time)
-                logger.info(f"[自动登录] 等待中... (已等待 {elapsed}秒, URL: {current_url[:100]})")
-                logger.info(f"[自动登录]   状态: is_main={is_main}, is_verif={is_verif}, is_login={is_login}, email_handled={email_input_handled}, verif_handled={verification_handled}")
+                logger.info(f"[自动登录] 循环 #{loop_count}, 已等待 {elapsed}秒")
+                logger.info(f"[自动登录]   URL: {current_url}")
+                logger.info(f"[自动登录]   状态: is_main={is_main}, is_verif={is_verif}, is_login={is_login}")
+                logger.info(f"[自动登录]   处理: email_handled={email_input_handled}, verif_handled={verification_handled}")
 
             # 检查是否已到达主页（登录成功）
             if _is_main_page(current_url):
@@ -1365,49 +1367,158 @@ def _is_login_page(url: str) -> bool:
 
 async def _input_email_and_proceed(page, email: str) -> bool:
     """在登录页输入邮箱并点击下一步
-    
-    auth.business.gemini.google/login 页面会自动获取焦点到邮箱输入框，
-    所以可以直接使用键盘输入，无需先查找输入框。
-    
+
+    支持两种页面类型：
+    1. auth.business.gemini.google/login - 直接输入邮箱
+    2. auth.business.gemini.google/account-chooser - 账户选择页面，需要先点击账户或"使用其他账户"
+
     Args:
         page: Playwright 页面对象
         email: 要输入的邮箱地址
-        
+
     Returns:
         是否成功
     """
     try:
+        current_url = page.url
         logger.info(f"[自动登录] 准备输入邮箱: {email}")
-        
+        logger.info(f"[自动登录] 当前页面: {current_url}")
+
         # 等待页面完全加载
         await asyncio.sleep(2)
-        
+
         try:
             await page.wait_for_load_state("networkidle", timeout=10000)
         except Exception:
             pass
-        
+
+        # 检查是否是 account-chooser 页面
+        if "account-chooser" in current_url:
+            logger.info("[自动登录] 检测到账户选择页面，尝试点击目标账户或'添加其他账号'...")
+
+            # 方法1：尝试点击匹配邮箱的账户的"登录"按钮
+            # HTML 结构: <span data-subject="email@xxx.com"> 包含登录按钮
+            try:
+                # 查找 data-subject 匹配邮箱的登录按钮
+                login_btn = await page.query_selector(f'span[data-subject="{email}"] button')
+                if login_btn:
+                    logger.info(f"[自动登录] 找到匹配账户 {email} 的登录按钮，点击...")
+                    await login_btn.click()
+                    await asyncio.sleep(3)
+                    logger.info("[自动登录] 已点击登录按钮")
+                    return True
+            except Exception as e:
+                logger.debug(f"[自动登录] 通过 data-subject 点击登录按钮失败: {e}")
+
+            # 方法2：尝试点击包含邮箱的 div 元素
+            try:
+                # HTML 结构: <div data-subject="email@xxx.com" ...>
+                account_div = await page.query_selector(f'div[data-subject="{email}"]')
+                if account_div:
+                    # 查找其中的登录按钮
+                    login_btn = await account_div.query_selector('button[type="submit"]')
+                    if login_btn:
+                        logger.info(f"[自动登录] 找到账户 {email} 的登录按钮，点击...")
+                        await login_btn.click()
+                        await asyncio.sleep(3)
+                        logger.info("[自动登录] 已点击登录按钮")
+                        return True
+            except Exception as e:
+                logger.debug(f"[自动登录] 通过 div[data-subject] 点击失败: {e}")
+
+            # 方法3：尝试通过 aria-label 查找登录按钮
+            try:
+                # aria-label 包含邮箱地址
+                login_btn = await page.query_selector(f'button[aria-label*="{email}"]')
+                if login_btn:
+                    logger.info(f"[自动登录] 通过 aria-label 找到登录按钮，点击...")
+                    await login_btn.click()
+                    await asyncio.sleep(3)
+                    logger.info("[自动登录] 已点击登录按钮")
+                    return True
+            except Exception as e:
+                logger.debug(f"[自动登录] 通过 aria-label 点击失败: {e}")
+
+            # 方法4：尝试点击"添加其他账号"按钮
+            try:
+                # HTML 结构: <div data-is-add-another-session="true" title="添加其他账号">
+                other_account_selectors = [
+                    '[data-is-add-another-session="true"]',
+                    '[title="添加其他账号"]',
+                    '[title="Add another account"]',
+                    'text="添加其他账号"',
+                    'text="Add another account"',
+                    'text="使用其他账户"',
+                    'text="Use another account"',
+                ]
+                for selector in other_account_selectors:
+                    try:
+                        btn = await page.query_selector(selector)
+                        if btn:
+                            logger.info(f"[自动登录] 找到'添加其他账号'按钮 ({selector})，点击...")
+                            await btn.click()
+                            await asyncio.sleep(3)
+                            logger.info("[自动登录] 已点击'添加其他账号'")
+                            return True
+                    except Exception:
+                        continue
+            except Exception as e:
+                logger.debug(f"[自动登录] 点击'添加其他账号'失败: {e}")
+
+            # 方法5：如果以上都失败，尝试直接输入邮箱（某些页面支持）
+            logger.info("[自动登录] 未找到可点击的元素，尝试直接输入邮箱...")
+
         # 再等待一下让页面稳定（确保输入框获取焦点）
         await asyncio.sleep(1)
-        
-        # 直接使用键盘输入（页面会自动获取焦点到输入框）
-        logger.info(f"[自动登录] 直接键盘输入邮箱: {email}")
-        await page.keyboard.type(email, delay=50)  # 模拟人类输入速度
-        
+
+        # 尝试查找并点击输入框
+        input_selectors = [
+            'input[type="email"]',
+            'input[name="identifier"]',
+            'input[name="email"]',
+            'input[type="text"]',
+        ]
+
+        input_found = False
+        for selector in input_selectors:
+            try:
+                input_elem = await page.query_selector(selector)
+                if input_elem:
+                    logger.info(f"[自动登录] 找到输入框: {selector}")
+                    await input_elem.click()
+                    await asyncio.sleep(0.3)
+                    # 清空输入框
+                    await input_elem.fill("")
+                    await asyncio.sleep(0.1)
+                    # 输入邮箱
+                    await input_elem.type(email, delay=50)
+                    input_found = True
+                    break
+            except Exception as e:
+                logger.debug(f"[自动登录] 选择器 {selector} 失败: {e}")
+                continue
+
+        if not input_found:
+            # 回退：直接使用键盘输入（页面可能会自动获取焦点到输入框）
+            logger.info(f"[自动登录] 未找到输入框，尝试直接键盘输入邮箱: {email}")
+            await page.keyboard.type(email, delay=50)
+
         await asyncio.sleep(0.5)
-        
+
         # 按回车键提交
         logger.info("[自动登录] 按回车键提交")
         await page.keyboard.press("Enter")
-        
+
         # 等待页面跳转
         await asyncio.sleep(3)
-        
+
         logger.info("[自动登录] 邮箱已输入并提交")
         return True
-        
+
     except Exception as e:
         logger.error(f"[自动登录] 输入邮箱失败: {e}")
+        import traceback
+        logger.error(f"[自动登录] 堆栈: {traceback.format_exc()}")
         return False
 
 
